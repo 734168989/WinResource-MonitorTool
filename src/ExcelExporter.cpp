@@ -155,6 +155,31 @@ static bool WriteZipFile(const wchar_t* path, const std::vector<ZipEntry>& entri
 
     wr(&eocd, sizeof(eocd));
     CloseHandle(hFile);
+
+    // ---- Verify: re-open and validate ZIP signatures ----
+    hFile = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr,
+                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        uint32_t sig = 0;
+        DWORD rd;
+        // Check first 4 bytes = local file header signature
+        ReadFile(hFile, &sig, 4, &rd, nullptr);
+        if (sig != 0x04034b50) {
+            CloseHandle(hFile);
+            return false;
+        }
+        // Seek to EOCD (last 22 bytes of file)
+        LARGE_INTEGER li;
+        li.QuadPart = -22;
+        SetFilePointerEx(hFile, li, nullptr, FILE_END);
+        sig = 0;
+        ReadFile(hFile, &sig, 4, &rd, nullptr);
+        CloseHandle(hFile);
+        if (sig != 0x06054b50) {
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -185,47 +210,32 @@ static std::string XmlEscape(const std::wstring& ws) {
     return out;
 }
 
-static std::string XmlEscapeAscii(const char* s) {
-    std::string out;
-    for (; *s; s++) {
-        switch (*s) {
-        case '&':  out += "&amp;";  break;
-        case '<':  out += "&lt;";   break;
-        case '>':  out += "&gt;";   break;
-        case '"':  out += "&quot;"; break;
-        case '\'': out += "&apos;"; break;
-        default:   out += *s;       break;
-        }
-    }
-    return out;
-}
-
 // ============================================================================
 // XLSX sheet XML builder
 // ============================================================================
 static std::string BuildSheetXml(const std::vector<std::wstring>& headers,
                                   const std::vector<std::vector<std::wstring>>& rows) {
     // Column letters A-Z (supports up to 26 columns)
-    const char* COL = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const char COL[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
     std::string xml;
     xml += "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n";
     xml += "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\r\n";
     xml += "<cols>\r\n";
     for (size_t c = 0; c < headers.size(); c++) {
-        // Auto-width: ~1.15 * max chars, min 12, max 30
-        double w = 12.0;
-        // Heuristic: each wide-char ~= 2 ASCII chars
-        int maxLen = (int)headers[c].length() * 2 + 2;
-        if (maxLen < 8) maxLen = 8;
-        w = maxLen * 1.15;
-        if (w < 12) w = 12;
-        if (w > 30) w = 30;
-        char colLetter[2] = { COL[c], '\0' };
+        // Calculate column width based on header text length
+        // CJK characters are ~2 Excel units wide, ASCII ~1 unit
+        double width = 0;
+        for (size_t k = 0; k < headers[c].length(); k++) {
+            width += (headers[c][k] > 0x7F) ? 2.2 : 1.1;
+        }
+        width += 3.0;  // padding
+        if (width < 8.0) width = 8.0;  // minimum width
+
         char buf[128];
         snprintf(buf, sizeof(buf),
-            "<col min=\"%d\" max=\"%d\" width=\"%.1f\" customWidth=\"1\"/>\r\n",
-            (int)(c + 1), (int)(c + 1), w);
+            "<col min=\"%d\" max=\"%d\" width=\"%.1f\" bestFit=\"1\" customWidth=\"1\"/>\r\n",
+            (int)(c + 1), (int)(c + 1), width);
         xml += buf;
     }
     xml += "</cols>\r\n";
@@ -234,10 +244,13 @@ static std::string BuildSheetXml(const std::vector<std::wstring>& headers,
     // Header row
     xml += "<row r=\"1\">\r\n";
     for (size_t c = 0; c < headers.size(); c++) {
-        char ref[8];
-        snprintf(ref, sizeof(ref), "%s1", COL + c);
-        xml += "<c r=\"" + std::string(ref) + "\" t=\"inlineStr\" s=\"1\">";
-        xml += "<is><t>" + XmlEscape(headers[c]) + "</t></is></c>\r\n";
+        char ref[16];
+        snprintf(ref, sizeof(ref), "%c1", COL[c]);
+        xml += "<c r=\"";
+        xml += ref;
+        xml += "\" t=\"inlineStr\" s=\"1\"><is><t>";
+        xml += XmlEscape(headers[c]);
+        xml += "</t></is></c>\r\n";
     }
     xml += "</row>\r\n";
 
@@ -247,10 +260,13 @@ static std::string BuildSheetXml(const std::vector<std::wstring>& headers,
         snprintf(rowTag, sizeof(rowTag), "<row r=\"%u\">\r\n", (unsigned)(r + 2));
         xml += rowTag;
         for (size_t c = 0; c < headers.size() && c < rows[r].size(); c++) {
-            char ref[8];
-            snprintf(ref, sizeof(ref), "%s%u", COL + c, (unsigned)(r + 2));
-            xml += "<c r=\"" + std::string(ref) + "\" t=\"inlineStr\">";
-            xml += "<is><t>" + XmlEscape(rows[r][c]) + "</t></is></c>\r\n";
+            char ref[16];
+            snprintf(ref, sizeof(ref), "%c%u", COL[c], (unsigned)(r + 2));
+            xml += "<c r=\"";
+            xml += ref;
+            xml += "\" t=\"inlineStr\" s=\"0\"><is><t>";
+            xml += XmlEscape(rows[r][c]);
+            xml += "</t></is></c>\r\n";
         }
         xml += "</row>\r\n";
     }
@@ -272,7 +288,7 @@ static std::string BuildContentTypes(int sheetCount) {
     xml += "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>\r\n";
     xml += "<Override PartName=\"/xl/styles.xml\"  ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>\r\n";
     for (int i = 1; i <= sheetCount; i++) {
-        char buf[128];
+        char buf[256];
         snprintf(buf, sizeof(buf),
             "<Override PartName=\"/xl/worksheets/sheet%d.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>\r\n", i);
         xml += buf;
@@ -312,11 +328,6 @@ static std::string BuildWorkbookXml(const std::vector<std::wstring>& sheetNames)
     xml += "<sheets>\r\n";
     for (size_t i = 0; i < sheetNames.size(); i++) {
         char buf[256];
-        snprintf(buf, sizeof(buf),
-            "<sheet name=\"%s\" sheetId=\"%zu\" r:id=\"rId%zu\"/>\r\n",
-            XmlEscapeAscii(XmlEscape(sheetNames[i]).c_str()).c_str(), // actually need UTF-8 name here
-            i + 1, i + 1);
-        // Fix: use UTF-8 name directly with XML escape
         std::string escName = XmlEscape(sheetNames[i]);
         snprintf(buf, sizeof(buf),
             "<sheet name=\"%s\" sheetId=\"%zu\" r:id=\"rId%zu\"/>\r\n",
@@ -347,8 +358,10 @@ static std::string BuildStylesXml() {
         "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/>\r\n"
         "</cellStyleXfs>\r\n"
         "<cellXfs count=\"2\">\r\n"
-        "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>\r\n"
-        "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/>\r\n"
+        "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyAlignment=\"1\">"
+        "<alignment horizontal=\"center\" vertical=\"center\"/></xf>\r\n"
+        "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">"
+        "<alignment horizontal=\"center\" vertical=\"center\"/></xf>\r\n"
         "</cellXfs>\r\n"
         "</styleSheet>";
 }
@@ -358,6 +371,8 @@ static std::string BuildStylesXml() {
 // ============================================================================
 ExcelExporter::ExcelExporter() {
     wcscpy_s(m_netUnit, 16, L"KB/s");
+    m_hFile = INVALID_HANDLE_VALUE;
+    m_lastFilePath[0] = L'\0';
 }
 
 ExcelExporter::~ExcelExporter() {}
@@ -402,6 +417,12 @@ bool ExcelExporter::Export(const wchar_t* outputDir, double startTimestamp,
 
     wchar_t filePath[MAX_PATH];
     swprintf_s(filePath, MAX_PATH, L"%s\\monitor_data_%s.xlsx", outputDir, timestamp);
+    wcscpy_s(m_lastFilePath, MAX_PATH, filePath);
+
+    // Normalize path separators
+    for (int i = 0; filePath[i]; i++) {
+        if (filePath[i] == L'/') filePath[i] = L'\\';
+    }
 
     // ---- Build sheet list ----
     std::vector<std::wstring> sheetNames;
@@ -504,4 +525,217 @@ bool ExcelExporter::Export(const wchar_t* outputDir, double startTimestamp,
 
     // ---- Write .xlsx (ZIP) file ----
     return WriteZipFile(filePath, zip);
+}
+
+// ============================================================================
+// Real-time export — file-locked streaming
+// ============================================================================
+static bool WriteZipToHandle(HANDLE hFile, const std::vector<ZipEntry>& entries) {
+    // Seek to beginning and truncate
+    SetFilePointer(hFile, 0, nullptr, FILE_BEGIN);
+    SetEndOfFile(hFile);
+
+    DWORD written;
+    auto wr = [&](const void* p, DWORD sz) -> bool {
+        return WriteFile(hFile, p, sz, &written, nullptr) && written == sz;
+    };
+
+    std::vector<uint32_t> offsets;
+    offsets.reserve(entries.size());
+
+    // ---- Local file headers + data ----
+    for (const auto& e : entries) {
+        uint32_t crc = Crc32(e.data.data(), e.data.size());
+        offsets.push_back(SetFilePointer(hFile, 0, nullptr, FILE_CURRENT));
+
+        ZipLocalHeader hdr = {};
+        hdr.sig        = 0x04034b50;
+        hdr.verNeed    = 20;
+        hdr.crc32      = crc;
+        hdr.compSize   = (uint32_t)e.data.size();
+        hdr.uncompSize = (uint32_t)e.data.size();
+        hdr.nameLen    = (uint16_t)e.name.size();
+
+        if (!wr(&hdr, sizeof(hdr)))           return false;
+        if (!wr(e.name.data(), hdr.nameLen))  return false;
+        if (!wr(e.data.data(), hdr.compSize)) return false;
+    }
+
+    uint32_t centralOff = SetFilePointer(hFile, 0, nullptr, FILE_CURRENT);
+
+    // ---- Central directory ----
+    for (size_t i = 0; i < entries.size(); i++) {
+        const auto& e = entries[i];
+        uint32_t crc = Crc32(e.data.data(), e.data.size());
+
+        ZipCentralDir cd = {};
+        cd.sig        = 0x02014b50;
+        cd.verMade    = 20;
+        cd.verNeed    = 20;
+        cd.crc32      = crc;
+        cd.compSize   = (uint32_t)e.data.size();
+        cd.uncompSize = (uint32_t)e.data.size();
+        cd.nameLen    = (uint16_t)e.name.size();
+        cd.localOff   = offsets[i];
+
+        if (!wr(&cd, sizeof(cd)))           return false;
+        if (!wr(e.name.data(), cd.nameLen)) return false;
+    }
+
+    uint32_t centralEnd = SetFilePointer(hFile, 0, nullptr, FILE_CURRENT);
+
+    // ---- EOCD ----
+    ZipEOCD eocd = {};
+    eocd.sig          = 0x06054b50;
+    eocd.entriesDisk  = (uint16_t)entries.size();
+    eocd.totalEntries = (uint16_t)entries.size();
+    eocd.centralSize  = centralEnd - centralOff;
+    eocd.centralOff   = centralOff;
+
+    if (!wr(&eocd, sizeof(eocd))) return false;
+    FlushFileBuffers(hFile);
+    return true;
+}
+
+bool ExcelExporter::BeginExport(const wchar_t* outputDir, double startTimestamp) {
+    // Build filename
+    time_t startT = (time_t)startTimestamp;
+    struct tm tm_start;
+    localtime_s(&tm_start, &startT);
+    wchar_t timestamp[32];
+    wcsftime(timestamp, 32, L"%Y%m%d%H%M%S", &tm_start);
+    swprintf_s(m_lastFilePath, MAX_PATH, L"%s\\monitor_data_%s.xlsx", outputDir, timestamp);
+
+    // Open file with write lock (FILE_SHARE_READ → external open is read-only)
+    m_hFile = CreateFileW(m_lastFilePath, GENERIC_READ | GENERIC_WRITE,
+                          FILE_SHARE_READ, nullptr,
+                          CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (m_hFile == INVALID_HANDLE_VALUE) return false;
+
+    return true;
+}
+
+static void BuildZipEntries(
+    std::vector<ZipEntry>& zip,
+    const std::vector<SystemMonitorData>& systemData,
+    const std::vector<MonitorProcess>& processes,
+    const std::vector<std::vector<ProcessMonitorData>>& allProcessData,
+    const wchar_t* netUnit)
+{
+    std::vector<std::wstring> sheetNames;
+    std::vector<std::vector<std::wstring>> sheetHeaders;
+    std::vector<std::vector<std::vector<std::wstring>>> sheetRows;
+
+    // Sheet 1: 系统资源
+    {
+        sheetNames.push_back(L"系统资源");
+        std::vector<std::wstring> headers = {
+            L"时间戳", L"运行时间(秒)", L"CPU使用率(%)", L"内存总量(GB)",
+            L"内存可用(GB)", L"内存使用(GB)", L"内存使用率(%)"
+        };
+        wchar_t netHdr[64];
+        swprintf_s(netHdr, 64, L"网络发送(%s)", netUnit);
+        headers.push_back(netHdr);
+        swprintf_s(netHdr, 64, L"网络接收(%s)", netUnit);
+        headers.push_back(netHdr);
+        sheetHeaders.push_back(headers);
+
+        std::vector<std::vector<std::wstring>> rows;
+        for (const auto& d : systemData) {
+            std::vector<std::wstring> row;
+            row.push_back(d.timestamp);
+            wchar_t buf[64];
+            swprintf_s(buf, 64, L"%.2f", d.runSeconds);    row.push_back(buf);
+            swprintf_s(buf, 64, L"%.2f", d.cpuUsage);       row.push_back(buf);
+            swprintf_s(buf, 64, L"%.2f", d.memoryTotalGB);  row.push_back(buf);
+            swprintf_s(buf, 64, L"%.2f", d.memoryAvailableGB); row.push_back(buf);
+            swprintf_s(buf, 64, L"%.2f", d.memoryUsedGB);   row.push_back(buf);
+            swprintf_s(buf, 64, L"%.2f", d.memoryUsage);    row.push_back(buf);
+            swprintf_s(buf, 64, L"%.2f", d.netSendSpeed);   row.push_back(buf);
+            swprintf_s(buf, 64, L"%.2f", d.netRecvSpeed);   row.push_back(buf);
+            rows.push_back(row);
+        }
+        sheetRows.push_back(rows);
+    }
+
+    // Process sheets
+    for (size_t pi = 0; pi < processes.size(); pi++) {
+        if (!processes[pi].enabled) continue;
+        if (pi >= allProcessData.size()) break;
+
+        // MakeSheetName function... let me use inline logic
+        std::wstring sname = processes[pi].name;
+        size_t dot = sname.rfind(L'.');
+        if (dot != std::wstring::npos) {
+            std::wstring ext = sname.substr(dot);
+            if (_wcsicmp(ext.c_str(), L".exe") == 0 || _wcsicmp(ext.c_str(), L".com") == 0)
+                sname = sname.substr(0, dot);
+        }
+        if (sname.length() > 31) sname = sname.substr(0, 31);
+        for (auto& ch : sname) {
+            if (ch == L'[' || ch == L']' || ch == L':' || ch == L'*' ||
+                ch == L'?' || ch == L'/' || ch == L'\\') ch = L'_';
+        }
+        sheetNames.push_back(sname);
+
+        std::vector<std::wstring> headers = {
+            L"时间戳", L"运行时间(秒)", L"进程ID", L"CPU使用率(%)",
+            L"内存使用率(%)", L"内存使用(MB)"
+        };
+        wchar_t netHdr[64];
+        swprintf_s(netHdr, 64, L"网络发送(%s)", netUnit);
+        headers.push_back(netHdr);
+        swprintf_s(netHdr, 64, L"网络接收(%s)", netUnit);
+        headers.push_back(netHdr);
+        sheetHeaders.push_back(headers);
+
+        std::vector<std::vector<std::wstring>> rows;
+        for (const auto& d : allProcessData[pi]) {
+            std::vector<std::wstring> row;
+            row.push_back(d.timestamp);
+            wchar_t buf[64];
+            swprintf_s(buf, 64, L"%.2f",  d.runSeconds);    row.push_back(buf);
+            swprintf_s(buf, 64, L"%lu",    d.pid);           row.push_back(buf);
+            swprintf_s(buf, 64, L"%.2f",  d.cpuUsage);      row.push_back(buf);
+            swprintf_s(buf, 64, L"%.2f",  d.memoryUsage);   row.push_back(buf);
+            swprintf_s(buf, 64, L"%.2f",  d.memoryUsedMB);  row.push_back(buf);
+            swprintf_s(buf, 64, L"%.2f",  d.netSendSpeed);  row.push_back(buf);
+            swprintf_s(buf, 64, L"%.2f",  d.netRecvSpeed);  row.push_back(buf);
+            rows.push_back(row);
+        }
+        sheetRows.push_back(rows);
+    }
+
+    int totalSheets = (int)sheetNames.size();
+
+    zip.push_back({"[Content_Types].xml", BuildContentTypes(totalSheets)});
+    zip.push_back({"_rels/.rels", BuildRels()});
+    zip.push_back({"xl/workbook.xml", BuildWorkbookXml(sheetNames)});
+    zip.push_back({"xl/_rels/workbook.xml.rels", BuildWorkbookRels(totalSheets)});
+    zip.push_back({"xl/styles.xml", BuildStylesXml()});
+    for (int i = 0; i < totalSheets; i++) {
+        char name[64];
+        snprintf(name, sizeof(name), "xl/worksheets/sheet%d.xml", i + 1);
+        zip.push_back({name, BuildSheetXml(sheetHeaders[i], sheetRows[i])});
+    }
+}
+
+bool ExcelExporter::FlushExport(
+    const std::vector<SystemMonitorData>& systemData,
+    const std::vector<MonitorProcess>& processes,
+    const std::vector<std::vector<ProcessMonitorData>>& allProcessData,
+    const wchar_t* netUnit)
+{
+    if (m_hFile == INVALID_HANDLE_VALUE) return false;
+
+    std::vector<ZipEntry> zip;
+    BuildZipEntries(zip, systemData, processes, allProcessData, netUnit);
+    return WriteZipToHandle(m_hFile, zip);
+}
+
+void ExcelExporter::EndExport() {
+    if (m_hFile == INVALID_HANDLE_VALUE) return;
+    FlushFileBuffers(m_hFile);
+    CloseHandle(m_hFile);
+    m_hFile = INVALID_HANDLE_VALUE;
 }

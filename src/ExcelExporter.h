@@ -19,7 +19,20 @@ public:
                 const wchar_t* netUnit);
 
     void SetNetUnit(const wchar_t* unit);
+    const wchar_t* GetLastFilePath() const { return m_lastFilePath; }
+
+    // Real-time export: lock file during monitoring, update every cycle
+    bool BeginExport(const wchar_t* outputDir, double startTimestamp);
+    bool FlushExport(const std::vector<SystemMonitorData>& systemData,
+                     const std::vector<MonitorProcess>& processes,
+                     const std::vector<std::vector<ProcessMonitorData>>& allProcessData,
+                     const wchar_t* netUnit);
+    void EndExport();
+
+    bool IsExportActive() const { return m_hFile != INVALID_HANDLE_VALUE; }
 
 private:
     wchar_t m_netUnit[16];
+    wchar_t m_lastFilePath[MAX_PATH];
+    HANDLE m_hFile;
 };

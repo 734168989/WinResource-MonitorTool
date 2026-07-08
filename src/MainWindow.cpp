@@ -43,8 +43,8 @@ bool RegisterMainWindowClass(HINSTANCE hInstance) {
 HWND CreateMainWindow(HINSTANCE hInstance) {
     int screenW = GetSystemMetrics(SM_CXSCREEN);
     int screenH = GetSystemMetrics(SM_CYSCREEN);
-    int winW = 1060;
-    int winH = 820;
+    int winW = 880;
+    int winH = 780;
     int x = (screenW - winW) / 2;
     int y = (screenH - winH) / 2;
 
@@ -52,7 +52,7 @@ HWND CreateMainWindow(HINSTANCE hInstance) {
         WS_EX_CONTROLPARENT | WS_EX_WINDOWEDGE,
         L"MonitorToolMainWindow",
         L"挂机电脑资源监测软件 V2.6 by 无人机",
-        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
         x, y, winW, winH,
         nullptr, nullptr, hInstance, nullptr
     );
@@ -96,24 +96,26 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         // Initialize state
         s->isMonitoring = false;
         s->isTopmost = false;
+        s->suppressListEvents = false;
         s->statusColor = RGB(0, 180, 0);  // green = 就绪
         s->hMonitorThread = nullptr;
         s->hStopEvent = nullptr;
         s->monitorStartTime = 0.0;
-        s->lastSystemDisplayIndex = 0;
+        s->lastFlushSystemIndex = 0;
+        s->lastFlushTick = 0;
         s->statusBarHeight = 28;
 
         // Default listview column widths
-        s->sysColWidths[0] = 145; s->sysColWidths[1] = 85;
-        s->sysColWidths[2] = 65;  s->sysColWidths[3] = 85;
-        s->sysColWidths[4] = 85;  s->sysColWidths[5] = 85;
-        s->sysColWidths[6] = 85;  s->sysColWidths[7] = 85;
-        s->sysColWidths[8] = 85;
+        s->sysColWidths[0] = 135; s->sysColWidths[1] = 100;
+        s->sysColWidths[2] = 70;  s->sysColWidths[3] = 110;
+        s->sysColWidths[4] = 110;  s->sysColWidths[5] = 110;
+        s->sysColWidths[6] = 110;  s->sysColWidths[7] = 110;
+        s->sysColWidths[8] = 110;
 
-        s->procColWidths[0] = 145; s->procColWidths[1] = 85;
-        s->procColWidths[2] = 65;  s->procColWidths[3] = 65;
-        s->procColWidths[4] = 85;  s->procColWidths[5] = 85;
-        s->procColWidths[6] = 85;  s->procColWidths[7] = 85;
+        s->procColWidths[0] = 135; s->procColWidths[1] = 100;
+        s->procColWidths[2] = 70;  s->procColWidths[3] = 70;
+        s->procColWidths[4] = 100;  s->procColWidths[5] = 110;
+        s->procColWidths[6] = 110;  s->procColWidths[7] = 110;
 
         // Create font
         s->hDefaultFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
@@ -168,6 +170,25 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
     case WM_TIMER: {
         if (wParam == IDT_DISPLAY_UPDATE && s && s->isMonitoring) {
             UpdateDisplay(s);
+            // Flush Excel every 2 seconds minimum (avoid UI lag on large datasets)
+            DWORD tick = GetTickCount();
+            int sysCount = (int)s->dataBuffer.GetSystemDataRef().size();
+            if (sysCount > s->lastFlushSystemIndex && (tick - s->lastFlushTick) >= 2000) {
+                s->lastFlushSystemIndex = sysCount;
+                s->lastFlushTick = tick;
+                auto& cfg = ConfigManager::Instance().GetConfig();
+                auto sysCopy = s->dataBuffer.GetSystemDataCopy();
+                std::vector<MonitorProcess> procs;
+                std::vector<std::vector<ProcessMonitorData>> procData;
+                for (auto* pm : s->processMonitors) {
+                    MonitorProcess mp = {};
+                    wcscpy_s(mp.name, MAX_PROCESS_NAME, pm->GetProcessName());
+                    mp.enabled = true;
+                    procs.push_back(mp);
+                    procData.push_back(s->dataBuffer.GetProcessDataCopy(pm->GetProcessName()));
+                }
+                s->excelExporter.FlushExport(sysCopy, procs, procData, cfg.netUnit);
+            }
         }
         return 0;
     }
@@ -246,6 +267,10 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             break;
         }
 
+        case IDC_NETWORK_CHECK:
+            UpdateNetworkControlsEnabled(s);
+            break;
+
         case IDC_REFRESH_INTERFACE_BTN: {
             auto ifaces = s->systemMonitor.GetNetworkInterfaces();
             ComboBox_ResetContent(s->hNetInterfaceCombo);
@@ -307,7 +332,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 
         case IDC_NET_UNIT_COMBO:
             if (code == CBN_SELCHANGE) {
-                int idx = ComboBox_GetCurSel(s->hNetInterfaceCombo);
+                int idx = ComboBox_GetCurSel(s->hNetUnitCombo);
                 if (idx >= 0) {
                     wchar_t unit[16];
                     ComboBox_GetLBText(s->hNetUnitCombo, idx, unit);
@@ -357,10 +382,13 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                     // 仅当勾选状态确实变化时才处理
                     UINT oldImg = (nmlv->uOldState & LVIS_STATEIMAGEMASK) >> 12;
                     UINT newImg = (nmlv->uNewState & LVIS_STATEIMAGEMASK) >> 12;
-                    if (oldImg != newImg) {
+                    if (oldImg != newImg && !s->suppressListEvents) {
                         auto& cfg = ConfigManager::Instance().GetConfig();
                         if (nmlv->iItem < cfg.processCount) {
                             cfg.processes[nmlv->iItem].enabled = (newImg == 2);
+                            // 实时更新对应的日志页签
+                            ToggleProcessTab(s, cfg.processes[nmlv->iItem].name,
+                                           cfg.processes[nmlv->iItem].enabled);
                         }
                     }
                 }
@@ -461,36 +489,36 @@ void CreateChildControls(HWND hParent, MainWindowState* s) {
     // ---- Monitor Config Group ----
     s->hConfigGroup = CreateWindowExW(0, L"BUTTON", L"监测配置",
         WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        8, yBase, 1028, 150, hParent, (HMENU)IDC_MONITOR_CONFIG_GROUP, hi, nullptr);
+        8, yBase, 874, 150, hParent, (HMENU)IDC_MONITOR_CONFIG_GROUP, hi, nullptr);
 
     int gy = 22;
     s->hProcessNameEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
-        20, yBase + gy, 200, 24, hParent, (HMENU)IDC_PROCESS_NAME_EDIT, hi, nullptr);
+        20, yBase + gy, 300, 24, hParent, (HMENU)IDC_PROCESS_NAME_EDIT, hi, nullptr);
 
     s->hAddBtn = CreateWindowExW(0, L"BUTTON", L"添加",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        228, yBase + gy, 60, 24, hParent, (HMENU)IDC_ADD_BTN, hi, nullptr);
+        328, yBase + gy, 60, 24, hParent, (HMENU)IDC_ADD_BTN, hi, nullptr);
 
     s->hDeleteAllBtn = CreateWindowExW(0, L"BUTTON", L"全部删除",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        294, yBase + gy, 80, 24, hParent, (HMENU)IDC_DELETE_ALL_BTN, hi, nullptr);
+        394, yBase + gy, 80, 24, hParent, (HMENU)IDC_DELETE_ALL_BTN, hi, nullptr);
 
     s->hSaveConfigBtn = CreateWindowExW(0, L"BUTTON", L"保存配置",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        380, yBase + gy, 80, 24, hParent, (HMENU)IDC_SAVE_CONFIG_BTN, hi, nullptr);
+        480, yBase + gy, 80, 24, hParent, (HMENU)IDC_SAVE_CONFIG_BTN, hi, nullptr);
 
     // Help button — right-aligned on the same row
     s->hHelpBtn = CreateWindowExW(0, L"BUTTON", L"?",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        994, yBase + gy, 30, 24, hParent, (HMENU)IDC_HELP_BTN, hi, nullptr);
+        810, yBase + gy, 30, 24, hParent, (HMENU)IDC_HELP_BTN, hi, nullptr);
 
     gy += 30;
     // Process ListView with checkboxes
     s->hProcessListView = CreateWindowExW(0, WC_LISTVIEWW, L"",
         WS_CHILD | WS_VISIBLE | WS_BORDER | LVS_REPORT | LVS_SINGLESEL |
         LVS_SHOWSELALWAYS | LVS_EX_CHECKBOXES,
-        20, yBase + gy, 1000, 90, hParent, (HMENU)IDC_PROCESS_LIST, hi, nullptr);
+        20, yBase + gy, 834, 90, hParent, (HMENU)IDC_PROCESS_LIST, hi, nullptr);
     ListView_SetExtendedListViewStyle(s->hProcessListView, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER);
 
     // Columns: enabled, name, actions
@@ -500,11 +528,11 @@ void CreateChildControls(HWND hParent, MainWindowState* s) {
     lvc.cx = 40;
     lvc.pszText = (LPWSTR)L"";
     ListView_InsertColumn(s->hProcessListView, 0, &lvc);
-    lvc.cx = 250;
+    lvc.cx = 200;
     lvc.fmt = LVCFMT_LEFT;
     lvc.pszText = (LPWSTR)L"软件名称";
     ListView_InsertColumn(s->hProcessListView, 1, &lvc);
-    lvc.cx = 60;
+    lvc.cx = 50;
     lvc.fmt = LVCFMT_CENTER;
     lvc.pszText = (LPWSTR)L"操作";
     ListView_InsertColumn(s->hProcessListView, 2, &lvc);
@@ -513,7 +541,7 @@ void CreateChildControls(HWND hParent, MainWindowState* s) {
     int itemsGroupY = yBase + 160;
     s->hItemsGroup = CreateWindowExW(0, L"BUTTON", L"监测项目设置",
         WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        8, itemsGroupY, 1028, 120, hParent, (HMENU)IDC_MONITOR_ITEMS_GROUP, hi, nullptr);
+        8, itemsGroupY, 874, 120, hParent, (HMENU)IDC_MONITOR_ITEMS_GROUP, hi, nullptr);
 
     int iy = 22;
     s->hCpuCheck = CreateWindowExW(0, L"BUTTON", L"CPU",
@@ -524,24 +552,21 @@ void CreateChildControls(HWND hParent, MainWindowState* s) {
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
         85, itemsGroupY + iy, 60, 22, hParent, (HMENU)IDC_MEMORY_CHECK, hi, nullptr);
 
-    s->hNetworkCheck = CreateWindowExW(0, L"BUTTON", L"网络流量",
+    s->hNetworkCheck = CreateWindowExW(0, L"BUTTON", L"网速",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
-        150, itemsGroupY + iy, 80, 22, hParent, (HMENU)IDC_NETWORK_CHECK, hi, nullptr);
+        150, itemsGroupY + iy, 50, 22, hParent, (HMENU)IDC_NETWORK_CHECK, hi, nullptr);
 
-    CreateWindowExW(0, L"STATIC", L"流量单位:",
-        WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
-        240, itemsGroupY + iy, 60, 22, hParent, nullptr, hi, nullptr);
-
+    // Unit combo — right next to the checkbox, no separate label
     s->hNetUnitCombo = CreateWindowExW(0, L"COMBOBOX", L"",
         WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-        305, itemsGroupY + iy, 100, 200, hParent, (HMENU)IDC_NET_UNIT_COMBO, hi, nullptr);
+        203, itemsGroupY + iy, 80, 200, hParent, (HMENU)IDC_NET_UNIT_COMBO, hi, nullptr);
     ComboBox_AddString(s->hNetUnitCombo, L"KB/s");
     ComboBox_AddString(s->hNetUnitCombo, L"MB/s");
     ComboBox_AddString(s->hNetUnitCombo, L"GB/s");
     ComboBox_SetCurSel(s->hNetUnitCombo, 0);
 
     iy += 28;
-    CreateWindowExW(0, L"STATIC", L"采样周期:",
+    s->hSampleLabel = CreateWindowExW(0, L"STATIC", L"采样周期: ",
         WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
         20, itemsGroupY + iy, 60, 22, hParent, nullptr, hi, nullptr);
 
@@ -549,40 +574,40 @@ void CreateChildControls(HWND hParent, MainWindowState* s) {
         WS_CHILD | WS_VISIBLE | ES_NUMBER,
         85, itemsGroupY + iy, 50, 22, hParent, (HMENU)IDC_SAMPLE_PERIOD_EDIT, hi, nullptr);
 
-    CreateWindowExW(0, L"STATIC", L"秒",
+    s->hSecondLabel = CreateWindowExW(0, L"STATIC", L"秒",
         WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
         140, itemsGroupY + iy, 25, 22, hParent, nullptr, hi, nullptr);
 
-    CreateWindowExW(0, L"STATIC", L"网卡选择:",
+    s->hNetInterfaceLabel = CreateWindowExW(0, L"STATIC", L"网卡选择: ",
         WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
-        175, itemsGroupY + iy, 60, 22, hParent, nullptr, hi, nullptr);
+        330, itemsGroupY + iy, 60, 22, hParent, nullptr, hi, nullptr);
 
     s->hNetInterfaceCombo = CreateWindowExW(0, L"COMBOBOX", L"",
         WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-        240, itemsGroupY + iy, 180, 200, hParent, (HMENU)IDC_NET_INTERFACE_COMBO, hi, nullptr);
+        400, itemsGroupY + iy, 200, 200, hParent, (HMENU)IDC_NET_INTERFACE_COMBO, hi, nullptr);
 
     s->hRefreshInterfaceBtn = CreateWindowExW(0, L"BUTTON", L"刷新",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        428, itemsGroupY + iy, 50, 22, hParent, (HMENU)IDC_REFRESH_INTERFACE_BTN, hi, nullptr);
+        610, itemsGroupY + iy, 45, 22, hParent, (HMENU)IDC_REFRESH_INTERFACE_BTN, hi, nullptr);
 
     iy += 28;
-    CreateWindowExW(0, L"STATIC", L"输出目录:",
+    s->hOutputDirLabel = CreateWindowExW(0, L"STATIC", L"输出目录:",
         WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE,
         20, itemsGroupY + iy, 60, 22, hParent, nullptr, hi, nullptr);
 
     s->hOutputDirEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L".\\",
         WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
-        85, itemsGroupY + iy, 340, 22, hParent, (HMENU)IDC_OUTPUT_DIR_EDIT, hi, nullptr);
+        85, itemsGroupY + iy, 520, 22, hParent, (HMENU)IDC_OUTPUT_DIR_EDIT, hi, nullptr);
 
     s->hBrowseDirBtn = CreateWindowExW(0, L"BUTTON", L"浏览",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        432, itemsGroupY + iy, 50, 22, hParent, (HMENU)IDC_BROWSE_DIR_BTN, hi, nullptr);
+        612, itemsGroupY + iy, 45, 22, hParent, (HMENU)IDC_BROWSE_DIR_BTN, hi, nullptr);
 
     // ---- Monitor Control Group ----
     int ctrlGroupY = itemsGroupY + 130;
     s->hControlGroup = CreateWindowExW(0, L"BUTTON", L"监测控制",
         WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        8, ctrlGroupY, 1028, 55, hParent, (HMENU)IDC_MONITOR_CONTROL_GROUP, hi, nullptr);
+        8, ctrlGroupY, 874, 68, hParent, (HMENU)IDC_MONITOR_CONTROL_GROUP, hi, nullptr);
 
     s->hStartBtn = CreateWindowExW(0, L"BUTTON", L"开始监测",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
@@ -592,16 +617,16 @@ void CreateChildControls(HWND hParent, MainWindowState* s) {
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED,
         130, ctrlGroupY + 20, 100, 28, hParent, (HMENU)IDC_STOP_BTN, hi, nullptr);
 
-    // ---- Data Tab Control ----
-    int tabY = ctrlGroupY + 80;  // 增加空间给状态标签
-    s->hTab = CreateWindowExW(0, WC_TABCONTROLW, L"",
-        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | TCS_BOTTOM,
-        8, tabY, 1028, 100, hParent, (HMENU)IDC_DATA_TAB, hi, nullptr);
-
-    // ---- Status label (below control group, right-aligned, colored) ----
+    // Status label — inside control group, right-aligned
     s->hStatusLabel = CreateWindowExW(0, L"STATIC", L"状态: 就绪",
         WS_CHILD | WS_VISIBLE | SS_RIGHT | SS_CENTERIMAGE,
-        0, 0, 200, 24, hParent, (HMENU)IDC_STATUS_LABEL, hi, nullptr);
+        600, ctrlGroupY + 21, 240, 26, hParent, (HMENU)IDC_STATUS_LABEL, hi, nullptr);
+
+    // ---- Data Tab Control ----
+    int tabY = ctrlGroupY + 78;
+    s->hTab = CreateWindowExW(0, WC_TABCONTROLW, L"",
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | TCS_BOTTOM,
+        8, tabY, 874, 100, hParent, (HMENU)IDC_DATA_TAB, hi, nullptr);
 
     // Create bold font for status label
     // Clone the label's current font (or system default) with FW_BOLD
@@ -656,7 +681,9 @@ void CreateChildControls(HWND hParent, MainWindowState* s) {
         s->hNetUnitCombo, s->hSamplePeriodEdit,
         s->hNetInterfaceCombo, s->hRefreshInterfaceBtn,
         s->hOutputDirEdit, s->hBrowseDirBtn,
-        s->hStartBtn, s->hStopBtn, s->hTopmostBtn, s->hHelpBtn
+        s->hStartBtn, s->hStopBtn, s->hTopmostBtn, s->hHelpBtn,
+        s->hNetInterfaceLabel, s->hSampleLabel, s->hSecondLabel, s->hOutputDirLabel,
+        s->hTab
     };
     for (auto c : controls)
         SendMessageW(c, WM_SETFONT, (WPARAM)s->hDefaultFont, TRUE);
@@ -673,7 +700,7 @@ void InitSystemListView(MainWindowState* s) {
 
     const wchar_t* headers[] = {
         L"时间", L"运行时间(秒)", L"CPU(%)", L"内存总量(GB)",
-        L"内存可用(GB)", L"内存使用(GB)", L"内存使用率(%)", L"网络发送", L"网络接收"
+        L"内存可用(GB)", L"内存使用(GB)", L"内存使用率(%)", L"网络发送(KB/s)", L"网络接收(KB/s)"
     };
 
     LVCOLUMNW lvc = {};
@@ -683,6 +710,12 @@ void InitSystemListView(MainWindowState* s) {
         lvc.cx = s->sysColWidths[i];
         lvc.pszText = (LPWSTR)headers[i];
         ListView_InsertColumn(s->hSystemListView, i, &lvc);
+    }
+
+    // Auto-size columns to fit (skip timestamp col — use fixed width for full datetime)
+    ListView_SetColumnWidth(s->hSystemListView, SYS_COL_TIME, 135);
+    for (int i = 1; i < SYS_COL_COUNT; i++) {
+        ListView_SetColumnWidth(s->hSystemListView, i, LVSCW_AUTOSIZE_USEHEADER);
     }
 }
 
@@ -695,7 +728,7 @@ HWND CreateProcessDataListView(HWND hParent, MainWindowState* s) {
 
     const wchar_t* headers[] = {
         L"时间", L"运行时间(秒)", L"进程ID", L"CPU(%)",
-        L"内存使用率(%)", L"内存使用(MB)", L"网络发送", L"网络接收"
+        L"内存使用率(%)", L"内存使用(MB)", L"网络发送(KB/s)", L"网络接收(KB/s)"
     };
 
     LVCOLUMNW lvc = {};
@@ -706,6 +739,13 @@ HWND CreateProcessDataListView(HWND hParent, MainWindowState* s) {
         lvc.pszText = (LPWSTR)headers[i];
         ListView_InsertColumn(hLV, i, &lvc);
     }
+
+    // Auto-size columns (skip timestamp col — use fixed width for full datetime)
+    ListView_SetColumnWidth(hLV, PROC_COL_TIME, 135);
+    for (int i = 1; i < PROC_COL_COUNT; i++) {
+        ListView_SetColumnWidth(hLV, i, LVSCW_AUTOSIZE_USEHEADER);
+    }
+
     ShowWindow(hLV, SW_HIDE); // Hidden initially until tab selected
     return hLV;
 }
@@ -735,16 +775,14 @@ void LayoutControls(MainWindowState* s) {
 
     // Control group
     int ctrlY = itemsY + itemsH + 8;
-    int ctrlH = 55;
+    int ctrlH = 68;
     SetWindowPos(s->hControlGroup, nullptr, margin, ctrlY, contentW, ctrlH, SWP_NOZORDER);
 
-    // Status label: below control group, right-aligned
-    int statusLabelH = 22;
-    int statusLabelY = ctrlY + ctrlH + 4;
-    SetWindowPos(s->hStatusLabel, nullptr, w - 260, statusLabelY, 250, statusLabelH, SWP_NOZORDER);
+    // Status label inside control group — right side
+    SetWindowPos(s->hStatusLabel, nullptr, w - 280, ctrlY + 21, 250, 26, SWP_NOZORDER);
 
-    // Tab control: fill remaining space
-    int tabY = statusLabelY + statusLabelH + 6;
+    // Tab control: right below control group
+    int tabY = ctrlY + ctrlH + 8;
     int tabH = h - tabY - s->statusBarHeight - margin;
     SetWindowPos(s->hTab, nullptr, margin, tabY, contentW, tabH, SWP_NOZORDER);
 
@@ -770,6 +808,11 @@ void LayoutControls(MainWindowState* s) {
 // Process List Management
 // ============================================================================
 void RefreshProcessList(MainWindowState* s) {
+    // Suppress LVN_ITEMCHANGED events during programmatic updates
+    // to prevent InsertItem (which defaults to unchecked) from
+    // overwriting the loaded config's enabled state.
+    s->suppressListEvents = true;
+
     ListView_DeleteAllItems(s->hProcessListView);
 
     auto& cfg = ConfigManager::Instance().GetConfig();
@@ -790,11 +833,26 @@ void RefreshProcessList(MainWindowState* s) {
         // Checkbox
         ListView_SetCheckState(s->hProcessListView, i, cfg.processes[i].enabled ? TRUE : FALSE);
     }
+
+    s->suppressListEvents = false;
 }
 
 // ============================================================================
 // Tab Management
 // ============================================================================
+
+// Strip ".exe" suffix from a process name for display purposes
+static std::wstring GetDisplayName(const wchar_t* name) {
+    std::wstring s(name);
+    if (s.length() > 4) {
+        std::wstring suffix = s.substr(s.length() - 4);
+        if (suffix == L".exe" || suffix == L".EXE" || suffix == L".Exe") {
+            s = s.substr(0, s.length() - 4);
+        }
+    }
+    return s;
+}
+
 void AddProcessTab(MainWindowState* s, const wchar_t* name) {
     // Check if tab already exists
     for (auto& tab : s->processTabs) {
@@ -803,13 +861,13 @@ void AddProcessTab(MainWindowState* s, const wchar_t* name) {
 
     ProcessTabInfo info;
     info.processName = name;
-    info.lastDisplayIndex = 0;
     info.hListView = CreateProcessDataListView(s->hTab, s);
 
-    // Add tab
+    // Add tab — display name without .exe suffix
+    std::wstring displayName = GetDisplayName(name);
     TCITEMW tci = {};
     tci.mask = TCIF_TEXT;
-    tci.pszText = (LPWSTR)name;
+    tci.pszText = (LPWSTR)displayName.c_str();
     info.tabIndex = TabCtrl_GetItemCount(s->hTab);
     TabCtrl_InsertItem(s->hTab, info.tabIndex, &tci);
 
@@ -829,6 +887,32 @@ void RemoveProcessTab(MainWindowState* s, const wchar_t* name) {
             s->processTabs.erase(it);
             break;
         }
+    }
+}
+
+void ToggleProcessTab(MainWindowState* s, const wchar_t* name, bool enabled) {
+    // Check if tab already exists for this process
+    bool tabExists = false;
+    for (auto& tab : s->processTabs) {
+        if (tab.processName == name) {
+            tabExists = true;
+            break;
+        }
+    }
+
+    if (enabled && !tabExists) {
+        // Create tab and refresh layout
+        AddProcessTab(s, name);
+        LayoutControls(s);
+    } else if (!enabled && tabExists) {
+        // Remove tab and refresh layout
+        RemoveProcessTab(s, name);
+        // If the removed tab was selected, switch to system tab
+        if (TabCtrl_GetCurSel(s->hTab) >= TabCtrl_GetItemCount(s->hTab)) {
+            TabCtrl_SetCurSel(s->hTab, 0);
+        }
+        OnTabChanged(s);
+        LayoutControls(s);
     }
 }
 
@@ -925,9 +1009,6 @@ void StartMonitoring(MainWindowState* s) {
     // Setup monitoring state
     s->isMonitoring = true;
     s->monitorStartTime = (double)time(nullptr);
-    s->lastSystemDisplayIndex = 0;
-    for (auto& tab : s->processTabs)
-        tab.lastDisplayIndex = 0;
 
     // Clear previous data
     s->dataBuffer.Clear();
@@ -950,6 +1031,16 @@ void StartMonitoring(MainWindowState* s) {
             s->processMonitors.push_back(pm);
         }
     }
+
+    s->lastFlushSystemIndex = 0;
+    s->lastFlushTick = 0;
+
+    // Start ETW-based per-process network monitor (requires admin)
+    s->netSpeedMonitor.Start();
+
+    // Begin real-time Excel export (file locked, read-only for external viewers)
+    s->excelExporter.SetNetUnit(cfg.netUnit);
+    s->excelExporter.BeginExport(cfg.outputDir, s->monitorStartTime);
 
     // Create stop event
     s->hStopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -992,8 +1083,32 @@ void StopMonitoring(MainWindowState* s) {
 
     s->isMonitoring = false;
 
-    // Export data
-    ExportData(s);
+    // Show saving indicator
+    UpdateStatus(s, L"状态: 正在保存中…", RGB(255, 165, 0));  // orange
+
+    // Final flush of all data to Excel
+    {
+        auto& cfg = ConfigManager::Instance().GetConfig();
+        auto sysCopy = s->dataBuffer.GetSystemDataCopy();
+        std::vector<MonitorProcess> procs;
+        std::vector<std::vector<ProcessMonitorData>> procData;
+        for (auto* pm : s->processMonitors) {
+            MonitorProcess mp = {};
+            wcscpy_s(mp.name, MAX_PROCESS_NAME, pm->GetProcessName());
+            mp.enabled = true;
+            procs.push_back(mp);
+            procData.push_back(s->dataBuffer.GetProcessDataCopy(pm->GetProcessName()));
+        }
+        s->excelExporter.FlushExport(sysCopy, procs, procData, cfg.netUnit);
+    }
+    s->excelExporter.EndExport();
+
+    {
+        wchar_t msg[512];
+        swprintf_s(msg, 512, L"数据已导出到 Excel 文件\r\n路径: %s",
+                   s->excelExporter.GetLastFilePath());
+        MessageBoxW(s->hMainWnd, msg, L"成功", MB_OK | MB_ICONINFORMATION);
+    }
 
     // Update UI state
     SetControlsEnabled(s, true);
@@ -1002,6 +1117,7 @@ void StopMonitoring(MainWindowState* s) {
     UpdateStatus(s, L"状态: 就绪", RGB(0, 180, 0));
 
     // Cleanup process monitors
+    s->netSpeedMonitor.Stop();
     for (auto* pm : s->processMonitors)
         delete pm;
     s->processMonitors.clear();
@@ -1023,10 +1139,12 @@ DWORD WINAPI MonitorThreadProc(LPVOID param) {
             s->dataBuffer.AddSystemData(sysData);
         }
 
-        // Collect process data
+        // Collect process data (one entry per PID for same-name processes)
         for (size_t i = 0; i < s->processMonitors.size(); i++) {
-            ProcessMonitorData procData = s->processMonitors[i]->Collect(runSeconds);
-            s->dataBuffer.AddProcessData(s->processMonitors[i]->GetProcessName(), procData);
+            auto procDataList = s->processMonitors[i]->Collect(runSeconds, &s->netSpeedMonitor);
+            for (auto& procData : procDataList) {
+                s->dataBuffer.AddProcessData(s->processMonitors[i]->GetProcessName(), procData);
+            }
         }
 
         // Sleep for remaining sample period (interruptible)
@@ -1053,8 +1171,12 @@ void UpdateSystemListView(MainWindowState* s) {
     const auto& sysData = s->dataBuffer.GetSystemDataRef();
     int totalCount = (int)sysData.size();
 
+    // Use actual ListView item count instead of a tracked index,
+    // so display stays correct even when DataBuffer trims old entries.
+    int displayedCount = ListView_GetItemCount(s->hSystemListView);
+
     // Add new items since last display
-    for (int i = s->lastSystemDisplayIndex; i < totalCount; i++) {
+    for (int i = displayedCount; i < totalCount; i++) {
         const auto& d = sysData[i];
 
         wchar_t buf[64];
@@ -1064,7 +1186,7 @@ void UpdateSystemListView(MainWindowState* s) {
 
         item.iSubItem = SYS_COL_TIME;
         item.pszText = (LPWSTR)d.timestamp;
-        if (i == s->lastSystemDisplayIndex) {
+        if (i == displayedCount) {
             ListView_InsertItem(s->hSystemListView, &item);
         }
         ListView_SetItemText(s->hSystemListView, i, SYS_COL_TIME, (LPWSTR)d.timestamp);
@@ -1094,15 +1216,12 @@ void UpdateSystemListView(MainWindowState* s) {
         ListView_SetItemText(s->hSystemListView, i, SYS_COL_NET_RECV, buf);
     }
 
-    s->lastSystemDisplayIndex = totalCount;
-
-    // Trim if too many
+    // Trim if too many items (keep last 10000)
     int currentItems = ListView_GetItemCount(s->hSystemListView);
     int maxItems = 10000;
     while (currentItems > maxItems) {
         ListView_DeleteItem(s->hSystemListView, 0);
         currentItems--;
-        if (s->lastSystemDisplayIndex > 0) s->lastSystemDisplayIndex--;
     }
 
     // Auto-scroll to bottom
@@ -1116,7 +1235,10 @@ void UpdateProcessListView(MainWindowState* s, ProcessTabInfo& tab) {
 
     int totalCount = (int)procData->size();
 
-    for (int i = tab.lastDisplayIndex; i < totalCount; i++) {
+    // Use actual ListView item count to stay in sync with DataBuffer trimming
+    int displayedCount = ListView_GetItemCount(tab.hListView);
+
+    for (int i = displayedCount; i < totalCount; i++) {
         const auto& d = (*procData)[i];
 
         wchar_t buf[64];
@@ -1124,7 +1246,7 @@ void UpdateProcessListView(MainWindowState* s, ProcessTabInfo& tab) {
         item.mask = LVIF_TEXT;
         item.iItem = i;
 
-        if (i == tab.lastDisplayIndex) {
+        if (i == displayedCount) {
             item.iSubItem = PROC_COL_TIME;
             item.pszText = (LPWSTR)d.timestamp;
             ListView_InsertItem(tab.hListView, &item);
@@ -1154,14 +1276,11 @@ void UpdateProcessListView(MainWindowState* s, ProcessTabInfo& tab) {
         ListView_SetItemText(tab.hListView, i, PROC_COL_NET_RECV, buf);
     }
 
-    tab.lastDisplayIndex = totalCount;
-
-    // Trim if too many
+    // Trim if too many items (keep last 10000)
     int currentItems = ListView_GetItemCount(tab.hListView);
     while (currentItems > 10000) {
         ListView_DeleteItem(tab.hListView, 0);
         currentItems--;
-        if (tab.lastDisplayIndex > 0) tab.lastDisplayIndex--;
     }
 
     if (currentItems > 0)
@@ -1181,14 +1300,25 @@ void SetControlsEnabled(MainWindowState* s, bool enabled) {
     EnableWindow(s->hCpuCheck, enabled);
     EnableWindow(s->hMemoryCheck, enabled);
     EnableWindow(s->hNetworkCheck, enabled);
-    EnableWindow(s->hNetUnitCombo, enabled);
 
     EnableWindow(s->hSamplePeriodEdit, enabled);
-    EnableWindow(s->hNetInterfaceCombo, enabled);
-    EnableWindow(s->hRefreshInterfaceBtn, enabled);
 
     EnableWindow(s->hOutputDirEdit, enabled);
     EnableWindow(s->hBrowseDirBtn, enabled);
+
+    // Network-dependent controls: enabled only when not monitoring AND checkbox is on
+    UpdateNetworkControlsEnabled(s);
+}
+
+void UpdateNetworkControlsEnabled(MainWindowState* s) {
+    bool netChecked = (SendMessageW(s->hNetworkCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
+    bool ctrlEnabled = IsWindowEnabled(s->hNetworkCheck);  // monitoring disables the checkbox
+    bool enable = netChecked && ctrlEnabled;
+
+    EnableWindow(s->hNetUnitCombo, enable);
+    EnableWindow(s->hNetInterfaceLabel, enable);
+    EnableWindow(s->hNetInterfaceCombo, enable);
+    EnableWindow(s->hRefreshInterfaceBtn, enable);
 }
 
 void UpdateStatus(MainWindowState* s, const wchar_t* status, COLORREF color) {
@@ -1226,7 +1356,9 @@ void ExportData(MainWindowState* s) {
 
     if (s->excelExporter.Export(cfg.outputDir, s->monitorStartTime,
                                 systemData, processes, allProcessData, cfg.netUnit)) {
-        MessageBoxW(s->hMainWnd, L"数据已导出到 Excel 文件", L"成功", MB_OK | MB_ICONINFORMATION);
+        wchar_t msg[512];
+        swprintf_s(msg, 512, L"数据已导出到 Excel 文件\r\n路径: %s", s->excelExporter.GetLastFilePath());
+        MessageBoxW(s->hMainWnd, msg, L"成功", MB_OK | MB_ICONINFORMATION);
     } else {
         MessageBoxW(s->hMainWnd, L"导出数据失败", L"错误", MB_OK | MB_ICONERROR);
     }
@@ -1259,12 +1391,10 @@ void ShowContextMenu(HWND hWnd, HWND hListView, int x, int y, MainWindowState* s
         ListView_DeleteAllItems(hListView);
         if (hListView == s->hSystemListView) {
             s->dataBuffer.Clear();
-            s->lastSystemDisplayIndex = 0;
         } else {
             for (auto& tab : s->processTabs) {
                 if (tab.hListView == hListView) {
                     s->dataBuffer.ClearProcess(tab.processName);
-                    tab.lastDisplayIndex = 0;
                     break;
                 }
             }
@@ -1332,6 +1462,9 @@ void SyncUIFromConfig(MainWindowState* s) {
     SendMessageW(s->hMemoryCheck, BM_SETCHECK, cfg.monitorMemory ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(s->hNetworkCheck, BM_SETCHECK, cfg.monitorNetwork ? BST_CHECKED : BST_UNCHECKED, 0);
 
+    // Sync network-dependent control enabled state
+    UpdateNetworkControlsEnabled(s);
+
     wchar_t buf[16];
     swprintf_s(buf, 16, L"%d", cfg.samplePeriod);
     SetWindowTextW(s->hSamplePeriodEdit, buf);
@@ -1356,6 +1489,12 @@ void SyncUIFromConfig(MainWindowState* s) {
 
 void SyncConfigFromUI(MainWindowState* s) {
     auto& cfg = ConfigManager::Instance().GetConfig();
+
+    // Sync process checkbox states from the ListView (authoritative source)
+    for (int i = 0; i < cfg.processCount; i++) {
+        cfg.processes[i].enabled =
+            (ListView_GetCheckState(s->hProcessListView, i) == TRUE);
+    }
 
     cfg.monitorCpu = (SendMessageW(s->hCpuCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
     cfg.monitorMemory = (SendMessageW(s->hMemoryCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
@@ -1477,12 +1616,14 @@ static const wchar_t* g_helpContents[] = {
     L"4. 进程级资源监控\r\n"
     L"   • 支持添加任意正在运行的进程名称\r\n"
     L"   • 自动检测进程是否存在，智能提示确认\r\n"
-    L"   • 监测项包括：CPU 占用、内存占用（MB）、网络速率\r\n"
-    L"   • 支持勾选启用/禁用单个进程\r\n"
+    L"   • 监测项：CPU、内存（专用工作集，MB）、网络速率\r\n"
+    L"   • 同名多进程按 PID 全部独立记录\r\n"
+    L"   • 支持勾选启用/禁用单个进程，日志页签实时更新\r\n"
+    L"   • 页签名称自动隐藏 .exe 后缀\r\n"
     L"\r\n"
     L"5. Excel 数据导出\r\n"
-    L"   停止监测后自动导出为 .xlsx 文件，包含系统和工作表和各进\r\n"
-    L"   程独立工作表，文件名带时间戳。\r\n"
+    L"   停止监测后自动导出为 .xlsx 文件，单元格居中对齐、列宽\r\n"
+    L"   自适应，包含系统工作表和各进程独立工作表，文件名带时戳。\r\n"
     L"\r\n"
     L"6. 其他功能\r\n"
     L"   • 窗口置顶：点击\"置顶\"按钮使窗口始终在最前\r\n"
@@ -1563,12 +1704,13 @@ static const wchar_t* g_helpContents[] = {
     L"2. 进程监控说明\r\n"
     L"   • 进程监控依赖进程名精确匹配（不区分大小写）\r\n"
     L"   • 若进程退出，对应数据将归零，但监测不会中断\r\n"
-    L"   • 同名进程只监控第一个匹配实例\r\n"
+    L"   • 同名多进程（不同 PID）全部独立记录，逐行显示\r\n"
+    L"   • 内存使用「专用工作集」，与任务管理器显示一致\r\n"
     L"\r\n"
-    L"3. 进程网络流量限制\r\n"
-    L"   Windows 系统不提供进程级网络流量统计 API（需 ETW 追踪），\r\n"
-    L"   因此进程数据中的网络发送/接收始终显示 0.00。\r\n"
-    L"   系统整体网络流量不受此限制，可正常显示。\r\n"
+    L"3. 进程网络流量\r\n"
+    L"   • 基于 ETW 内核追踪实时捕获 TCP/IP 事件，按 PID 聚合\r\n"
+    L"   • 必须以管理员权限运行（启动时 UAC 提权）才能获取\r\n"
+    L"   • 未提权时进程网络始终显示 0.00，系统网络不受影响\r\n"
     L"\r\n"
     L"4. Excel 导出\r\n"
     L"   • 仅在停止监测时自动导出\r\n"
@@ -1576,8 +1718,9 @@ static const wchar_t* g_helpContents[] = {
     L"   • 导出需要目标目录写入权限\r\n"
     L"\r\n"
     L"5. 权限说明\r\n"
-    L"   部分进程的数据读取可能需要管理员权限。如发现某进程数据始\r\n"
-    L"   终为 0，请尝试以管理员身份运行本软件。\r\n"
+    L"   进程级网络监测需要 ETW 内核追踪会话，必须以管理员权限\r\n"
+    L"   运行。程序已嵌入提权清单，启动时自动弹出 UAC 提示。\r\n"
+    L"   若拒绝提权，CPU/内存/系统网络不受影响。\r\n"
     L"\r\n"
     L"6. 性能影响\r\n"
     L"   软件使用低优先级线程采集数据，对系统性能影响极小。采样\r\n"

@@ -48,6 +48,24 @@ struct MonitorConfig {
     wchar_t         outputDir[MAX_PATH];
 };
 
+// Initialize config with clean empty state (no default processes)
+inline void InitEmptyConfig(MonitorConfig* cfg) {
+    cfg->processes = (MonitorProcess*)malloc(16 * sizeof(MonitorProcess));
+    cfg->processCount = 0;
+    cfg->processCapacity = 16;
+    cfg->monitorCpu = true;
+    cfg->monitorMemory = true;
+    cfg->monitorNetwork = true;
+    cfg->samplePeriod = 5;
+    wcscpy_s(cfg->netUnit, 16, L"KB/s");
+    wcscpy_s(cfg->netInterface, 256, L"全部");
+    wchar_t exePath[MAX_PATH];
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    wchar_t* lastSlash = wcsrchr(exePath, L'\\');
+    if (lastSlash) *lastSlash = L'\0';
+    wcscpy_s(cfg->outputDir, MAX_PATH, exePath);
+}
+
 // Initialize config with defaults
 inline void InitDefaultConfig(MonitorConfig* cfg) {
     cfg->processes = (MonitorProcess*)malloc(16 * sizeof(MonitorProcess));

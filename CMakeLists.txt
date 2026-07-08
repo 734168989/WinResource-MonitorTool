@@ -22,6 +22,7 @@ set(SOURCES
     src/ConfigManager.cpp
     src/SystemMonitor.cpp
     src/ProcessMonitor.cpp
+    src/NetSpeedMonitor.cpp
     src/ExcelExporter.cpp
 )
 
@@ -32,6 +33,7 @@ set(HEADERS
     src/ConfigManager.h
     src/SystemMonitor.h
     src/ProcessMonitor.h
+    src/NetSpeedMonitor.h
     src/ExcelExporter.h
     src/resource.h
 )
@@ -66,13 +68,24 @@ set_target_properties(MonitorTool PROPERTIES
     WIN32_EXECUTABLE TRUE
 )
 
+# Disable default MSVC manifest, use custom admin-required manifest via mt.exe
+if(MSVC)
+    target_link_options(MonitorTool PRIVATE "/MANIFEST:NO")
+    add_custom_command(TARGET MonitorTool POST_BUILD
+        COMMAND "mt.exe" -nologo
+                -manifest "${CMAKE_SOURCE_DIR}/res/MonitorTool.manifest"
+                "-outputresource:$<TARGET_FILE:MonitorTool>;#1"
+        COMMENT "Embedding custom manifest (requireAdministrator)"
+    )
+endif()
+
 # ============================================================================
 # Compiler-specific options
 # ============================================================================
 if(MSVC)
     # ---- MSVC (Visual Studio) ----
-    # .rc file is UTF-8; resource compiler needs codepage hint + src include path
-    set(CMAKE_RC_FLAGS "/c65001 /I src" CACHE STRING "UTF-8 resource compiler flag" FORCE)
+    # .rc file is UTF-8; resource compiler needs codepage hint + src/include paths
+    set(CMAKE_RC_FLAGS "/c65001 /I src /I res" CACHE STRING "UTF-8 resource compiler flag" FORCE)
 
     target_compile_options(MonitorTool PRIVATE
         /W4              # Warning level 4

@@ -10,6 +10,7 @@
 #include "ProcessMonitor.h"
 #include "ExcelExporter.h"
 #include "ConfigManager.h"
+#include "NetSpeedMonitor.h"
 #include "resource.h"
 
 #pragma comment(lib, "comctl32.lib")
@@ -45,7 +46,6 @@ enum ProcessCol {
 struct ProcessTabInfo {
     std::wstring processName;
     HWND hListView;
-    int lastDisplayIndex;
     int tabIndex; // index in the tab control
 };
 
@@ -75,7 +75,11 @@ struct MainWindowState {
     // Sample & interface
     HWND hSamplePeriodEdit;
     HWND hNetInterfaceCombo;
+    HWND hNetInterfaceLabel;
     HWND hRefreshInterfaceBtn;
+    HWND hSampleLabel;
+    HWND hSecondLabel;
+    HWND hOutputDirLabel;
     HWND hHelpBtn;
 
     // Output
@@ -101,6 +105,7 @@ struct MainWindowState {
     // State
     bool isMonitoring;
     bool isTopmost;
+    bool suppressListEvents;  // suppress LVN_ITEMCHANGED during RefreshProcessList
     HANDLE hMonitorThread;
     HANDLE hStopEvent;
     double monitorStartTime;
@@ -108,11 +113,13 @@ struct MainWindowState {
     // Core components
     DataBuffer dataBuffer;
     SystemMonitor systemMonitor;
+    NetSpeedMonitor netSpeedMonitor;
     std::vector<ProcessMonitor*> processMonitors;
     ExcelExporter excelExporter;
 
     // Display tracking
-    int lastSystemDisplayIndex;
+    int lastFlushSystemIndex;
+    DWORD lastFlushTick;
 
     // Fonts
     HFONT hDefaultFont;
@@ -148,6 +155,7 @@ void RefreshProcessList(MainWindowState* s);
 // Tab management
 void AddProcessTab(MainWindowState* s, const wchar_t* name);
 void RemoveProcessTab(MainWindowState* s, const wchar_t* name);
+void ToggleProcessTab(MainWindowState* s, const wchar_t* name, bool enabled);
 void RebuildProcessTabs(MainWindowState* s);
 void OnTabChanged(MainWindowState* s);
 
@@ -163,6 +171,7 @@ void UpdateProcessListView(MainWindowState* s, ProcessTabInfo& tab);
 
 // UI state
 void SetControlsEnabled(MainWindowState* s, bool enabled);
+void UpdateNetworkControlsEnabled(MainWindowState* s);
 void UpdateStatus(MainWindowState* s, const wchar_t* status, COLORREF color);
 
 // Data export

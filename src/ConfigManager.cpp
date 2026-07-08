@@ -215,11 +215,11 @@ bool ConfigManager::LoadConfig(const wchar_t* configPath) {
     HANDLE hFile = CreateFileW(configPath, GENERIC_READ, FILE_SHARE_READ,
                                nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (hFile == INVALID_HANDLE_VALUE) {
-        // File doesn't exist, use defaults and save
+        // File doesn't exist, use defaults (don't auto-create — only save on explicit "保存配置")
         FreeConfig(&m_config);
         InitDefaultConfig(&m_config);
         m_loaded = true;
-        return SaveConfig(configPath);
+        return true;
     }
 
     DWORD size = GetFileSize(hFile, nullptr);
@@ -258,18 +258,33 @@ bool ConfigManager::LoadConfig(const wchar_t* configPath) {
     wbuf[wlen] = L'\0';
     free(buf);
 
-    // Reset config and parse
+    // Reset config and parse — start empty, let JSON fully populate
     FreeConfig(&m_config);
-    InitDefaultConfig(&m_config);
-    // Clear defaults so JSON can repopulate
-    m_config.processCount = 0;
+    InitEmptyConfig(&m_config);
 
-    ParseValue(wbuf, m_config);
+    const wchar_t* parseResult = ParseValue(wbuf, m_config);
     free(wbuf);
 
-    // If no processes loaded, add default
-    if (m_config.processCount == 0) {
-        ConfigAddProcess(&m_config, L"MPrintExp.exe");
+    // Check if parsing succeeded
+    if (!parseResult) {
+        OutputDebugStringW(L"[ConfigManager] JSON parse error — using defaults\r\n");
+        FreeConfig(&m_config);
+        InitDefaultConfig(&m_config);
+        m_loaded = true;
+        return true;
+    }
+
+    // Diagnostic: log loaded processes
+    {
+        wchar_t dbg[512];
+        swprintf_s(dbg, 512, L"[ConfigManager] Loaded %d process(es):\r\n", m_config.processCount);
+        OutputDebugStringW(dbg);
+        for (int i = 0; i < m_config.processCount; i++) {
+            swprintf_s(dbg, 512, L"  [%d] %s (enabled=%d)\r\n",
+                       i, m_config.processes[i].name,
+                       m_config.processes[i].enabled ? 1 : 0);
+            OutputDebugStringW(dbg);
+        }
     }
 
     m_loaded = true;
@@ -277,43 +292,89 @@ bool ConfigManager::LoadConfig(const wchar_t* configPath) {
 }
 
 bool ConfigManager::SaveConfig(const wchar_t* configPath) {
-    // Build JSON string manually with proper escaping
-    wchar_t buf[32768];
+    // Build JSON string with safe bounded formatting
+    wchar_t buf[65536];
     wchar_t esc[520];  // buffer for escaped strings (max path * 2)
     int pos = 0;
+    int remaining = 65536;
+    int written;
 
-    pos += wsprintfW(buf + pos, L"{\r\n");
+    written = swprintf_s(buf + pos, remaining, L"{\r\n");
+    if (written < 0) return false;
+    pos += written; remaining -= written;
 
     // monitorProcesses array
-    pos += wsprintfW(buf + pos, L"  \"monitorProcesses\": [\r\n");
+    written = swprintf_s(buf + pos, remaining, L"  \"monitorProcesses\": [\r\n");
+    if (written < 0) return false;
+    pos += written; remaining -= written;
+
     for (int i = 0; i < m_config.processCount; i++) {
         JsonEscapeString(m_config.processes[i].name, esc, 520);
-        pos += wsprintfW(buf + pos, L"    {\r\n");
-        pos += wsprintfW(buf + pos, L"      \"name\": %s,\r\n", esc);
-        pos += wsprintfW(buf + pos, L"      \"enabled\": %s\r\n", m_config.processes[i].enabled ? L"true" : L"false");
-        pos += wsprintfW(buf + pos, L"    }%s\r\n", (i < m_config.processCount - 1) ? L"," : L"");
+        written = swprintf_s(buf + pos, remaining, L"    {\r\n");
+        if (written < 0) return false;
+        pos += written; remaining -= written;
+
+        written = swprintf_s(buf + pos, remaining, L"      \"name\": %s,\r\n", esc);
+        if (written < 0) return false;
+        pos += written; remaining -= written;
+
+        written = swprintf_s(buf + pos, remaining, L"      \"enabled\": %s\r\n",
+                            m_config.processes[i].enabled ? L"true" : L"false");
+        if (written < 0) return false;
+        pos += written; remaining -= written;
+
+        written = swprintf_s(buf + pos, remaining, L"    }%s\r\n",
+                            (i < m_config.processCount - 1) ? L"," : L"");
+        if (written < 0) return false;
+        pos += written; remaining -= written;
     }
-    pos += wsprintfW(buf + pos, L"  ],\r\n");
+    written = swprintf_s(buf + pos, remaining, L"  ],\r\n");
+    if (written < 0) return false;
+    pos += written; remaining -= written;
 
     // monitorItems
-    pos += wsprintfW(buf + pos, L"  \"monitorItems\": {\r\n");
-    pos += wsprintfW(buf + pos, L"    \"cpu\": %s,\r\n", m_config.monitorCpu ? L"true" : L"false");
-    pos += wsprintfW(buf + pos, L"    \"memory\": %s,\r\n", m_config.monitorMemory ? L"true" : L"false");
-    pos += wsprintfW(buf + pos, L"    \"network\": %s\r\n", m_config.monitorNetwork ? L"true" : L"false");
-    pos += wsprintfW(buf + pos, L"  },\r\n");
+    written = swprintf_s(buf + pos, remaining, L"  \"monitorItems\": {\r\n");
+    if (written < 0) return false;
+    pos += written; remaining -= written;
 
-    pos += wsprintfW(buf + pos, L"  \"samplePeriod\": %d,\r\n", m_config.samplePeriod);
+    written = swprintf_s(buf + pos, remaining, L"    \"cpu\": %s,\r\n", m_config.monitorCpu ? L"true" : L"false");
+    if (written < 0) return false;
+    pos += written; remaining -= written;
+
+    written = swprintf_s(buf + pos, remaining, L"    \"memory\": %s,\r\n", m_config.monitorMemory ? L"true" : L"false");
+    if (written < 0) return false;
+    pos += written; remaining -= written;
+
+    written = swprintf_s(buf + pos, remaining, L"    \"network\": %s\r\n", m_config.monitorNetwork ? L"true" : L"false");
+    if (written < 0) return false;
+    pos += written; remaining -= written;
+
+    written = swprintf_s(buf + pos, remaining, L"  },\r\n");
+    if (written < 0) return false;
+    pos += written; remaining -= written;
+
+    written = swprintf_s(buf + pos, remaining, L"  \"samplePeriod\": %d,\r\n", m_config.samplePeriod);
+    if (written < 0) return false;
+    pos += written; remaining -= written;
 
     JsonEscapeString(m_config.netUnit, esc, 520);
-    pos += wsprintfW(buf + pos, L"  \"netUnit\": %s,\r\n", esc);
+    written = swprintf_s(buf + pos, remaining, L"  \"netUnit\": %s,\r\n", esc);
+    if (written < 0) return false;
+    pos += written; remaining -= written;
 
     JsonEscapeString(m_config.netInterface, esc, 520);
-    pos += wsprintfW(buf + pos, L"  \"netInterface\": %s,\r\n", esc);
+    written = swprintf_s(buf + pos, remaining, L"  \"netInterface\": %s,\r\n", esc);
+    if (written < 0) return false;
+    pos += written; remaining -= written;
 
     JsonEscapeString(m_config.outputDir, esc, 520);
-    pos += wsprintfW(buf + pos, L"  \"outputDir\": %s\r\n", esc);
+    written = swprintf_s(buf + pos, remaining, L"  \"outputDir\": %s\r\n", esc);
+    if (written < 0) return false;
+    pos += written; remaining -= written;
 
-    pos += wsprintfW(buf + pos, L"}\r\n");
+    written = swprintf_s(buf + pos, remaining, L"}\r\n");
+    if (written < 0) return false;
+    pos += written;
 
     // Convert to UTF-8
     int clen = WideCharToMultiByte(CP_UTF8, 0, buf, pos, nullptr, 0, nullptr, nullptr);
@@ -329,11 +390,11 @@ bool ConfigManager::SaveConfig(const wchar_t* configPath) {
         return false;
     }
 
-    DWORD written = 0;
-    WriteFile(hFile, cbuf, (DWORD)clen, &written, nullptr);
+    DWORD written2 = 0;
+    WriteFile(hFile, cbuf, (DWORD)clen, &written2, nullptr);
     CloseHandle(hFile);
     free(cbuf);
-    return written == (DWORD)clen;
+    return written2 == (DWORD)clen;
 }
 
 // ---- Convenience methods ----

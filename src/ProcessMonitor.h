@@ -4,36 +4,46 @@
 #include <tlhelp32.h>
 #include <psapi.h>
 #include <string>
+#include <vector>
 #include "DataModels.h"
 
 #pragma comment(lib, "psapi.lib")
+
+class NetSpeedMonitor;
 
 class ProcessMonitor {
 public:
     explicit ProcessMonitor(const wchar_t* processName);
     ~ProcessMonitor();
 
-    ProcessMonitorData Collect(double runSeconds);
+    // Returns data for ALL running instances of the process (one per PID).
+    // netMon may be nullptr — in that case netSendSpeed/netRecvSpeed stay 0.
+    std::vector<ProcessMonitorData> Collect(double runSeconds, NetSpeedMonitor* netMon);
     const wchar_t* GetProcessName() const { return m_processName; }
-    DWORD GetPid() const;
-    bool IsRunning();
+    bool HasAnyRunning();
     void Reset();
     void SetNetUnit(const wchar_t* unit);
 
 private:
-    DWORD FindProcessPid();
-    double GetProcessCpuUsage();
-    void GetProcessMemory(double& usage, double& usedMB);
+    struct PidCpuState {
+        DWORD pid;
+        ULONGLONG lastCpuKernel;
+        ULONGLONG lastCpuUser;
+        ULONGLONG lastCpuTimestamp;
+        bool cpuInitialized;
+    };
+
+    std::vector<DWORD> FindAllProcessPids();
+    double GetProcessCpuUsage(DWORD pid, PidCpuState& state);
+    void GetProcessMemory(DWORD pid, double& usage, double& usedMB);
 
     wchar_t m_processName[260];
-    DWORD m_pid;
     wchar_t m_netUnit[16];
-
-    // CPU baseline
-    ULONGLONG m_lastCpuKernel;
-    ULONGLONG m_lastCpuUser;
-    ULONGLONG m_lastCpuTimestamp;
-    bool m_cpuInitialized;
+    std::vector<PidCpuState> m_pidStates;  // per-PID CPU baseline
+    double m_lastCollectRunSeconds;  // for network delta time
 
     LARGE_INTEGER m_qpcFrequency;
+
+    double ConvertBytesToUnit(double bytesPerSec) const;
+    double GetCollectElapsedSec(double runSeconds);
 };

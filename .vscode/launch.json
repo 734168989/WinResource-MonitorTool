@@ -1,0 +1,29 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug (MonitorTool)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/out/build/x64-Debug/bin/Debug/MonitorTool.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "console": "newExternalWindow",
+            "preLaunchTask": "CMake: Build (Debug)"
+        },
+        {
+            "name": "Debug (RelWithDebInfo)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/out/build/x64-RelWithDebInfo/bin/RelWithDebInfo/MonitorTool.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "console": "newExternalWindow",
+            "preLaunchTask": "CMake: Build (RelWithDebInfo)"
+        }
+    ]
+}

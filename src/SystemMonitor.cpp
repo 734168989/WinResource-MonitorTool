@@ -4,6 +4,7 @@
 #include <ctime>
 #include <cmath>
 #include <malloc.h>
+#include <unordered_set>
 
 #pragma comment(lib, "iphlpapi.lib")
 
@@ -22,11 +23,11 @@ SystemMonitor::SystemMonitor()
 SystemMonitor::~SystemMonitor() {}
 
 // ============================================================================
-// Filters
+// Filters — ncpa.cpl 会过滤掉隐藏适配器和虚拟网卡
 // ============================================================================
 static bool IsPhysicalNicType(IFTYPE type) {
     switch (type) {
-    case IF_TYPE_ETHERNET_CSMACD:  // 6  板载有线
+    case IF_TYPE_ETHERNET_CSMACD:  // 6  有线以太网
     case IF_TYPE_IEEE80211:        // 71 Wi-Fi
         return true;
     default:
@@ -36,15 +37,31 @@ static bool IsPhysicalNicType(IFTYPE type) {
 
 // ============================================================================
 // GetNetworkInterfaces — ncpa.cpl 完全一致
-// GetAdaptersAddresses(flags=0) = 仅 TCP/IP 绑定适配器 = ncpa.cpl 同源
+// GetAdaptersAddresses(flags=0) = 仅 TCP/IP 绑定适配器
+// + IsPhysicalNicType()           = 仅物理类型（以太网 / Wi-Fi）
+// + HardwareInterface             = 排除隐藏/虚拟适配器（如 Hyper-V "本地连接* N"）
 // ============================================================================
 std::vector<std::wstring> SystemMonitor::GetNetworkInterfaces() {
     std::vector<std::wstring> interfaces;
     interfaces.push_back(L"全部");
     m_ifIndexToFriendly.clear();
 
+    // Step 1: 通过 GetIfTable2 获取 HardwareInterface 标志
+    //         隐藏虚拟适配器（如 Hyper‑V 的 "本地连接* N"）HardwareInterface == FALSE
+    std::unordered_set<NET_IFINDEX> hardwareIfSet;
+    PMIB_IF_TABLE2 pIfTable = nullptr;
+    if (GetIfTable2(&pIfTable) == NO_ERROR) {
+        for (ULONG i = 0; i < pIfTable->NumEntries; i++) {
+            MIB_IF_ROW2& row = pIfTable->Table[i];
+            if (row.InterfaceAndOperStatusFlags.HardwareInterface) {
+                hardwareIfSet.insert(row.InterfaceIndex);
+            }
+        }
+        FreeMibTable(pIfTable);
+    }
+
+    // Step 2: 通过 GetAdaptersAddresses(flags=0) 获取 TCP/IP 绑定适配器
     ULONG bufLen = 0;
-    // flags=0: only TCP/IP-bound adapters — same list as ncpa.cpl
     if (GetAdaptersAddresses(AF_UNSPEC, 0, nullptr, nullptr, &bufLen) != ERROR_BUFFER_OVERFLOW)
         return interfaces;
 
@@ -56,6 +73,7 @@ std::vector<std::wstring> SystemMonitor::GetNetworkInterfaces() {
             if (p->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
             if (!p->FriendlyName || p->FriendlyName[0] == L'\0') continue;
             if (!IsPhysicalNicType(p->IfType)) continue;
+            if (hardwareIfSet.find(p->IfIndex) == hardwareIfSet.end()) continue;
 
             std::wstring name(p->FriendlyName);
             interfaces.push_back(name);

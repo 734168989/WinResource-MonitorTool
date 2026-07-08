@@ -34,6 +34,13 @@
 #define IDC_MONITOR_ITEMS_GROUP  2022
 #define IDC_MONITOR_CONTROL_GROUP 2023
 #define IDC_MONITOR_STATUS_GROUP 2024
+#define IDC_HELP_BTN         2025
+
+// Help dialog
+#define IDC_HELP_DIALOG   2026
+#define IDC_HELP_TAB      2027
+#define IDC_HELP_CLOSE    2028
+#define IDC_HELP_TEXT     2029
 
 // Timers
 #define IDT_DISPLAY_UPDATE 3001

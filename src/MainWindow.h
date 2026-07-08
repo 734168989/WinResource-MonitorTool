@@ -76,6 +76,7 @@ struct MainWindowState {
     HWND hSamplePeriodEdit;
     HWND hNetInterfaceCombo;
     HWND hRefreshInterfaceBtn;
+    HWND hHelpBtn;
 
     // Output
     HWND hOutputDirEdit;
@@ -173,3 +174,6 @@ void ShowContextMenu(HWND hWnd, HWND hListView, int x, int y, MainWindowState* s
 // Config sync
 void SyncUIFromConfig(MainWindowState* s);
 void SyncConfigFromUI(MainWindowState* s);
+
+// Help dialog
+void ShowHelpDialog(HWND hParent);

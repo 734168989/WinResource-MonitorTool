@@ -209,9 +209,9 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             }
 
             if (!exists) {
-                wchar_t msg[512];
-                swprintf_s(msg, 512, L"未检测到进程 '%s' 正在运行，是否确认添加？", trim);
-                if (MessageBoxW(hWnd, msg, L"确认", MB_YESNO | MB_ICONQUESTION) != IDYES)
+                wchar_t confirmMsg[512];
+                swprintf_s(confirmMsg, 512, L"未检测到进程 '%s' 正在运行，是否确认添加？", trim);
+                if (MessageBoxW(hWnd, confirmMsg, L"确认", MB_YESNO | MB_ICONQUESTION) != IDYES)
                     break;
             }
 
@@ -300,6 +300,10 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             SetWindowTextW(s->hTopmostBtn, s->isTopmost ? L"取消置顶" : L"置顶");
             break;
         }
+
+        case IDC_HELP_BTN:
+            ShowHelpDialog(hWnd);
+            break;
 
         case IDC_NET_UNIT_COMBO:
             if (code == CBN_SELCHANGE) {
@@ -476,6 +480,11 @@ void CreateChildControls(HWND hParent, MainWindowState* s) {
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         380, yBase + gy, 80, 24, hParent, (HMENU)IDC_SAVE_CONFIG_BTN, hi, nullptr);
 
+    // Help button — right-aligned on the same row
+    s->hHelpBtn = CreateWindowExW(0, L"BUTTON", L"?",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        994, yBase + gy, 30, 24, hParent, (HMENU)IDC_HELP_BTN, hi, nullptr);
+
     gy += 30;
     // Process ListView with checkboxes
     s->hProcessListView = CreateWindowExW(0, WC_LISTVIEWW, L"",
@@ -640,14 +649,14 @@ void CreateChildControls(HWND hParent, MainWindowState* s) {
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 50, 24, hParent, (HMENU)IDC_TOPMOST_BTN, hi, nullptr);
 
-    // Set fonts on all controls
+    // Set fonts on all controls (status label gets bold font separately)
     HWND controls[] = {
         s->hProcessNameEdit, s->hAddBtn, s->hDeleteAllBtn, s->hSaveConfigBtn,
         s->hCpuCheck, s->hMemoryCheck, s->hNetworkCheck,
         s->hNetUnitCombo, s->hSamplePeriodEdit,
         s->hNetInterfaceCombo, s->hRefreshInterfaceBtn,
         s->hOutputDirEdit, s->hBrowseDirBtn,
-        s->hStartBtn, s->hStopBtn, s->hTopmostBtn, s->hStatusLabel
+        s->hStartBtn, s->hStopBtn, s->hTopmostBtn, s->hHelpBtn
     };
     for (auto c : controls)
         SendMessageW(c, WM_SETFONT, (WPARAM)s->hDefaultFont, TRUE);
@@ -1369,4 +1378,434 @@ void SyncConfigFromUI(MainWindowState* s) {
     }
 
     GetWindowTextW(s->hOutputDirEdit, cfg.outputDir, MAX_PATH);
+}
+
+// ============================================================================
+// Help Dialog
+// ============================================================================
+
+// Build timestamp from compiler __DATE__ / __TIME__ macros
+// __DATE__ = "Mmm DD YYYY"   __TIME__ = "HH:MM:SS"
+static const wchar_t* BuildTimestamp() {
+    static wchar_t buf[64];
+    const char* months[] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+    int month = 1;
+    for (int i = 0; i < 12; i++) {
+        if (strncmp(__DATE__, months[i], 3) == 0) { month = i + 1; break; }
+    }
+    int day = atoi(__DATE__ + 4);
+    int year = atoi(__DATE__ + 7);
+    int h = atoi(__TIME__);
+    int m = atoi(__TIME__ + 3);
+    int s = atoi(__TIME__ + 6);
+    swprintf_s(buf, 64, L"%d年%d月%d日 %02d时%02d分%02d秒", year, month, day, h, m, s);
+    return buf;
+}
+
+// Buffer for Tab 0 (includes dynamic build timestamp)
+static wchar_t g_helpContentTab0[1024];
+static bool g_helpContentTab0Init = false;
+
+static const wchar_t* GetHelpTab0Content() {
+    if (!g_helpContentTab0Init) {
+        swprintf_s(g_helpContentTab0, 1024,
+            L"【挂机电脑资源监测软件  V2.6】\r\n"
+            L"\r\n"
+            L"作者：无人机\r\n"
+            L"编译时间：%s\r\n"
+            L"\r\n"
+            L"本软件是一款专业的 Windows 系统资源监测工具，专为挂机场\r\n"
+            L"景设计。可在无人值守的情况下持续记录系统 CPU、内存、网\r\n"
+            L"络流量以及指定进程的资源占用情况，并在监测结束后自动导出\r\n"
+            L"为 Excel 文件，方便后续分析。\r\n"
+            L"\r\n"
+            L"核心能力：\r\n"
+            L"  • 系统级 CPU / 内存 / 网络流量实时监控\r\n"
+            L"  • 进程级精细化资源监测（CPU、内存、网络）\r\n"
+            L"  • 多进程并行监控，独立数据展示\r\n"
+            L"  • 自动 Excel 数据导出\r\n"
+            L"  • 配置持久化，随开随用",
+            BuildTimestamp());
+        g_helpContentTab0Init = true;
+    }
+    return g_helpContentTab0;
+}
+
+// Help content for each tab
+static const wchar_t* g_helpTitles[] = {
+    L"软件简介",
+    L"功能说明",
+    L"使用方法",
+    L"使用窍门",
+    L"注意事项"
+};
+
+static const wchar_t* g_helpContents[] = {
+    // Tab 0: 软件简介
+    L"【挂机电脑资源监测软件  V2.6】\r\n"
+    L"\r\n"
+    L"作者：无人机\r\n"
+    L"\r\n"
+    L"本软件是一款专业的 Windows 系统资源监测工具，专为挂机场\r\n"
+    L"景设计。可在无人值守的情况下持续记录系统 CPU、内存、网\r\n"
+    L"络流量以及指定进程的资源占用情况，并在监测结束后自动导出\r\n"
+    L"为 Excel 文件，方便后续分析。\r\n"
+    L"\r\n"
+    L"核心能力：\r\n"
+    L"  • 系统级 CPU / 内存 / 网络流量实时监控\r\n"
+    L"  • 进程级精细化资源监测（CPU、内存、网络）\r\n"
+    L"  • 多进程并行监控，独立数据展示\r\n"
+    L"  • 自动 Excel 数据导出\r\n"
+    L"  • 配置持久化，随开随用",
+
+    // Tab 1: 功能说明
+    L"【功能说明】\r\n"
+    L"\r\n"
+    L"1. CPU 使用率监控\r\n"
+    L"   实时显示系统整体 CPU 负载百分比，精度保留两位小数。\r\n"
+    L"\r\n"
+    L"2. 内存监控\r\n"
+    L"   显示内存总量、可用量、已用量（单位 GB）以及使用率（%），\r\n"
+    L"   数据来源于 Windows 全局内存状态 API，准确可靠。\r\n"
+    L"\r\n"
+    L"3. 网络流量监控\r\n"
+    L"   • 支持按网卡筛选：下拉列表与 ncpa.cpl（网络连接）完全一致\r\n"
+    L"   • 默认\"全部\"汇总所有物理网卡流量\r\n"
+    L"   • 支持 KB/s、MB/s、GB/s 三种单位切换\r\n"
+    L"   • 显示发送/接收双向速率\r\n"
+    L"\r\n"
+    L"4. 进程级资源监控\r\n"
+    L"   • 支持添加任意正在运行的进程名称\r\n"
+    L"   • 自动检测进程是否存在，智能提示确认\r\n"
+    L"   • 监测项包括：CPU 占用、内存占用（MB）、网络速率\r\n"
+    L"   • 支持勾选启用/禁用单个进程\r\n"
+    L"\r\n"
+    L"5. Excel 数据导出\r\n"
+    L"   停止监测后自动导出为 .xlsx 文件，包含系统和工作表和各进\r\n"
+    L"   程独立工作表，文件名带时间戳。\r\n"
+    L"\r\n"
+    L"6. 其他功能\r\n"
+    L"   • 窗口置顶：点击\"置顶\"按钮使窗口始终在最前\r\n"
+    L"   • 配置保存：手动保存/自动加载配置文件\r\n"
+    L"   • 右键菜单：日志列表支持清除/全选/复制",
+
+    // Tab 2: 使用方法
+    L"【使用方法】\r\n"
+    L"\r\n"
+    L"步骤 1 — 选择监测项目\r\n"
+    L"  在\"监测项目设置\"区域勾选需要监测的项目（CPU / 内存 / 网络）。\r\n"
+    L"\r\n"
+    L"步骤 2 — 配置网络参数\r\n"
+    L"  选择合适的流量单位（KB/s、MB/s、GB/s），从下拉列表中选择\r\n"
+    L"  要监控的网卡（默认为\"全部\"）。可点击\"刷新\"按钮重新扫描。\r\n"
+    L"\r\n"
+    L"步骤 3 — 设置采样周期\r\n"
+    L"  输入采样间隔秒数（1~60），建议日常使用 5 秒。周期越短数据\r\n"
+    L"  越精细，但数据量越大。\r\n"
+    L"\r\n"
+    L"步骤 4 — 添加监测进程\r\n"
+    L"  在\"监测配置\"区域输入进程名称（如 MPrintExp.exe），点击\r\n"
+    L"  \"添加\"。可添加多个进程，勾选需要的进程启用监测。使用\r\n"
+    L"  \"删除\"移除单个进程，\"全部删除\"清空列表。\r\n"
+    L"\r\n"
+    L"步骤 5 — 设置输出目录\r\n"
+    L"  输入 Excel 文件保存路径，或点击\"浏览\"选择目录。默认为\r\n"
+    L"  软件所在目录。\r\n"
+    L"\r\n"
+    L"步骤 6 — 开始监测\r\n"
+    L"  点击\"开始监测\"按钮，软件开始采集数据。监测中配置项被\r\n"
+    L"  锁定，状态标签变为红色\"状态: 监测中\"。\r\n"
+    L"\r\n"
+    L"步骤 7 — 停止与导出\r\n"
+    L"  点击\"停止监测\"按钮，数据自动导出为 Excel 文件并弹出提示。",
+
+    // Tab 3: 使用窍门
+    L"【使用窍门】\r\n"
+    L"\r\n"
+    L"1. 采样周期选择\r\n"
+    L"   • 1~3 秒：适合短时间精细观察，数据密度高\r\n"
+    L"   • 5~10 秒：日常使用推荐，平衡精度与性能 ★\r\n"
+    L"   • 30~60 秒：长时间挂机，数据文件较小\r\n"
+    L"\r\n"
+    L"2. 网卡选择技巧\r\n"
+    L"   • 默认\"全部\"汇总所有物理网卡流量，满足大多数场景\r\n"
+    L"   • 仅关注某个网卡时（如 VPN、外网），选择对应网卡即可\r\n"
+    L"\r\n"
+    L"3. 窗口置顶\r\n"
+    L"   底部\"置顶\"按钮可使窗口始终在前，方便实时观察数据。再次\r\n"
+    L"   点击取消置顶。\r\n"
+    L"\r\n"
+    L"4. 右键快捷操作\r\n"
+    L"   在数据列表上右键可访问：\r\n"
+    L"   • \"清除日志\" — 清空当前显示的数据\r\n"
+    L"   • \"全选\" — 选中所有行\r\n"
+    L"   • \"复制选中\" — 复制到剪贴板（Tab 分隔，可粘贴到 Excel）\r\n"
+    L"\r\n"
+    L"5. 标题栏右键\r\n"
+    L"   右键点击标题栏可快速\"打开软件所在目录\"，方便访问配置\r\n"
+    L"   文件和导出数据。\r\n"
+    L"\r\n"
+    L"6. 配置保存\r\n"
+    L"   设置好参数后点击\"保存配置\"，下次启动自动恢复所有设置，\r\n"
+    L"   无需重复配置。\r\n"
+    L"\r\n"
+    L"7. 进程名称获取\r\n"
+    L"   打开任务管理器（Ctrl+Shift+Esc）→\"详细信息\"标签页 → \r\n"
+    L"   找到目标进程 → 复制\"名称\"列的值粘贴到软件中。",
+
+    // Tab 4: 注意事项
+    L"【注意事项】\r\n"
+    L"\r\n"
+    L"1. 监测期间限制\r\n"
+    L"   监测进行中，所有配置项（监测项目、进程列表、采样周期、\r\n"
+    L"   网卡选择、输出目录）将被锁定，不可修改。需先停止监测。\r\n"
+    L"\r\n"
+    L"2. 进程监控说明\r\n"
+    L"   • 进程监控依赖进程名精确匹配（不区分大小写）\r\n"
+    L"   • 若进程退出，对应数据将归零，但监测不会中断\r\n"
+    L"   • 同名进程只监控第一个匹配实例\r\n"
+    L"\r\n"
+    L"3. 进程网络流量限制\r\n"
+    L"   Windows 系统不提供进程级网络流量统计 API（需 ETW 追踪），\r\n"
+    L"   因此进程数据中的网络发送/接收始终显示 0.00。\r\n"
+    L"   系统整体网络流量不受此限制，可正常显示。\r\n"
+    L"\r\n"
+    L"4. Excel 导出\r\n"
+    L"   • 仅在停止监测时自动导出\r\n"
+    L"   • 文件名格式：资源监测数据_YYYYMMDD_HHMMSS.xlsx\r\n"
+    L"   • 导出需要目标目录写入权限\r\n"
+    L"\r\n"
+    L"5. 权限说明\r\n"
+    L"   部分进程的数据读取可能需要管理员权限。如发现某进程数据始\r\n"
+    L"   终为 0，请尝试以管理员身份运行本软件。\r\n"
+    L"\r\n"
+    L"6. 性能影响\r\n"
+    L"   软件使用低优先级线程采集数据，对系统性能影响极小。采样\r\n"
+    L"   周期越短、监控进程越多，资源消耗越大。\r\n"
+    L"\r\n"
+    L"7. 配置文件\r\n"
+    L"   config.json 保存在软件所在目录。如遇配置异常，删除该文件\r\n"
+    L"   后重启软件即可恢复默认设置。\r\n"
+    L"\r\n"
+    L"8. 兼容性\r\n"
+    L"   支持 Windows 7 / 8 / 10 / 11 操作系统。建议使用 Windows 10\r\n"
+    L"   及以上版本以获得最佳体验。"
+};
+
+static const int g_helpTabCount = 5;
+
+// Help dialog window proc
+LRESULT CALLBACK HelpDlgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    static HWND hTab = nullptr;
+    static HWND hText = nullptr;
+    static HWND hCloseBtn = nullptr;
+    static HFONT hFont = nullptr;
+
+    switch (msg) {
+    case WM_CREATE: {
+        HINSTANCE hi = (HINSTANCE)GetWindowLongPtrW(hWnd, GWLP_HINSTANCE);
+
+        // Create a nice readable font (9pt Microsoft YaHei)
+        HDC hdc = GetDC(hWnd);
+        int fontH = -MulDiv(9, GetDeviceCaps(hdc, LOGPIXELSY), 72);
+        ReleaseDC(hWnd, hdc);
+        hFont = CreateFontW(
+            fontH, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei");
+
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        int cw = rc.right - rc.left;
+        int ch = rc.bottom - rc.top;
+
+        int margin = 14;
+        int btnH = 32;
+        int btnW = 100;
+        int tabH = ch - margin - btnH - margin;  // tab height: leave room for button
+
+        // Tab control
+        hTab = CreateWindowExW(0, WC_TABCONTROLW, L"",
+            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP,
+            margin, margin, cw - margin * 2, tabH,
+            hWnd, (HMENU)IDC_HELP_TAB, hi, nullptr);
+        SendMessageW(hTab, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+        // Insert tabs
+        TCITEMW tci = {};
+        tci.mask = TCIF_TEXT;
+        for (int i = 0; i < g_helpTabCount; i++) {
+            tci.pszText = (LPWSTR)g_helpTitles[i];
+            TabCtrl_InsertItem(hTab, i, &tci);
+        }
+
+        // Calculate text area inside the tab's display region
+        RECT displayRc;
+        GetClientRect(hTab, &displayRc);
+        TabCtrl_AdjustRect(hTab, FALSE, &displayRc);
+        // displayRc is now the area where we can draw, relative to hTab's client
+
+        int pad = 6;
+        // Convert to dialog-relative coordinates (tab is at margin,margin in dialog)
+        int tx = margin + displayRc.left + pad;
+        int ty = margin + displayRc.top + pad;
+        int tw = (displayRc.right - displayRc.left) - pad * 2;
+        int th = (displayRc.bottom - displayRc.top) - pad * 2;
+
+        // Read-only multi-line text area
+        hText = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+            WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY |
+            WS_VSCROLL | ES_AUTOVSCROLL,
+            tx, ty, tw, th,
+            hWnd, (HMENU)IDC_HELP_TEXT, hi, nullptr);
+        SendMessageW(hText, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+        // Close button — bottom center
+        hCloseBtn = CreateWindowExW(0, L"BUTTON", L"关  闭(&C)",
+            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
+            (cw - btnW) / 2, ch - margin - btnH, btnW, btnH,
+            hWnd, (HMENU)IDC_HELP_CLOSE, hi, nullptr);
+        SendMessageW(hCloseBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+        // Show first tab content
+        SetWindowTextW(hText, GetHelpTab0Content());
+
+        // Set focus to close button
+        SetFocus(hCloseBtn);
+        return 0;
+    }
+
+    case WM_SIZE: {
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        int cw = rc.right - rc.left;
+        int ch = rc.bottom - rc.top;
+        int margin = 14;
+        int btnH = 32;
+        int btnW = 100;
+
+        // Resize tab
+        SetWindowPos(hTab, nullptr, margin, margin,
+            cw - margin * 2, ch - margin - btnH - margin,
+            SWP_NOZORDER | SWP_NOACTIVATE);
+
+        // Resize text area (inside tab display region)
+        RECT displayRc;
+        GetClientRect(hTab, &displayRc);
+        TabCtrl_AdjustRect(hTab, FALSE, &displayRc);
+        int pad = 6;
+        SetWindowPos(hText, nullptr,
+            margin + displayRc.left + pad,
+            margin + displayRc.top + pad,
+            (displayRc.right - displayRc.left) - pad * 2,
+            (displayRc.bottom - displayRc.top) - pad * 2,
+            SWP_NOZORDER | SWP_NOACTIVATE);
+
+        // Reposition close button
+        SetWindowPos(hCloseBtn, nullptr,
+            (cw - btnW) / 2, ch - margin - btnH, btnW, btnH,
+            SWP_NOZORDER | SWP_NOACTIVATE);
+        return 0;
+    }
+
+    case WM_NOTIFY: {
+        NMHDR* nmh = (NMHDR*)lParam;
+        if (nmh->idFrom == IDC_HELP_TAB && nmh->code == TCN_SELCHANGE) {
+            int sel = TabCtrl_GetCurSel(hTab);
+            if (sel >= 0 && sel < g_helpTabCount) {
+                if (sel == 0)
+                    SetWindowTextW(hText, GetHelpTab0Content());
+                else
+                    SetWindowTextW(hText, g_helpContents[sel]);
+            }
+        }
+        return 0;
+    }
+
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDC_HELP_CLOSE || LOWORD(wParam) == IDCANCEL) {
+            DestroyWindow(hWnd);
+            return 0;
+        }
+        break;
+
+    case WM_CLOSE:
+        DestroyWindow(hWnd);
+        return 0;
+
+    case WM_DESTROY:
+        if (hFont) DeleteObject(hFont);
+        hTab = nullptr;
+        hText = nullptr;
+        hCloseBtn = nullptr;
+        hFont = nullptr;
+        return 0;
+    }
+
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+void ShowHelpDialog(HWND hParent) {
+    // Register help dialog class (once)
+    static bool classRegistered = false;
+    if (!classRegistered) {
+        WNDCLASSEXW wc = {};
+        wc.cbSize = sizeof(WNDCLASSEXW);
+        wc.style = CS_HREDRAW | CS_VREDRAW;
+        wc.lpfnWndProc = HelpDlgProc;
+        wc.cbClsExtra = 0;
+        wc.cbWndExtra = 0;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.hIcon = nullptr;
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+        wc.lpszMenuName = nullptr;
+        wc.lpszClassName = L"MonitorToolHelpDialog";
+        wc.hIconSm = nullptr;
+        RegisterClassExW(&wc);
+        classRegistered = true;
+    }
+
+    // Calculate dialog size — use AdjustWindowRect so client area is exactly what we want
+    RECT desiredClient = { 0, 0, 680, 560 };
+    AdjustWindowRect(&desiredClient, WS_POPUP | WS_CAPTION | WS_SYSMENU, FALSE);
+    int dlgW = desiredClient.right - desiredClient.left;
+    int dlgH = desiredClient.bottom - desiredClient.top;
+
+    RECT parentRc;
+    GetWindowRect(hParent, &parentRc);
+    int x = parentRc.left + ((parentRc.right - parentRc.left) - dlgW) / 2;
+    int y = parentRc.top + ((parentRc.bottom - parentRc.top) - dlgH) / 2;
+
+    HWND hDlg = CreateWindowExW(
+        0,
+        L"MonitorToolHelpDialog",
+        L"帮助说明",
+        WS_POPUP | WS_CAPTION | WS_SYSMENU,
+        x, y, dlgW, dlgH,
+        hParent, nullptr, GetModuleHandleW(nullptr), nullptr
+    );
+
+    if (!hDlg) return;
+
+    ShowWindow(hDlg, SW_SHOW);
+    UpdateWindow(hDlg);
+
+    // Disable parent window for modal behavior
+    EnableWindow(hParent, FALSE);
+
+    // Modal message loop
+    MSG dlgMsg;
+    while (IsWindow(hDlg)) {
+        if (GetMessageW(&dlgMsg, nullptr, 0, 0)) {
+            if (!IsDialogMessageW(hDlg, &dlgMsg)) {
+                TranslateMessage(&dlgMsg);
+                DispatchMessageW(&dlgMsg);
+            }
+        }
+    }
+
+    // Re-enable parent
+    EnableWindow(hParent, TRUE);
+    SetForegroundWindow(hParent);
 }

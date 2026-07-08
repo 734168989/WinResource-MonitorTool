@@ -1,0 +1,36 @@
+// monitor.rc - Resource definitions
+#include <windows.h>
+#include <commctrl.h>
+
+// Common Controls v6 visual styles
+#pragma comment(linker,"/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
+
+// Version info
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     2,1,0,0
+PRODUCTVERSION  2,1,0,0
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      ""
+            VALUE "FileDescription",  "MonitorTool"
+            VALUE "FileVersion",      "2.1.0.0"
+            VALUE "InternalName",     "MonitorTool"
+            VALUE "LegalCopyright",   ""
+            VALUE "OriginalFilename", "MonitorTool.exe"
+            VALUE "ProductName",      "MonitorTool"
+            VALUE "ProductVersion",   "2.1"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04B0
+    END
+END

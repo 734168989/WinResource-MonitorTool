@@ -1,0 +1,33 @@
+{
+    "cmake.sourceDirectory": "${workspaceFolder}",
+    "cmake.buildDirectory": "${workspaceFolder}/out/build/${buildType}",
+    "cmake.configureSettings": {},
+    "cmake.generator": "Ninja",
+    "cmake.preferredGenerators": [
+        {
+            "name": "Ninja",
+            "platforms": ["win32", "x64"]
+        }
+    ],
+    "files.associations": {
+        "*.rc": "rc",
+        "*.h": "cpp",
+        "*.cpp": "cpp"
+    },
+    "files.exclude": {
+        "out/build/**/CMakeFiles": true,
+        "out/build/**/.cmake": true,
+        "**/.vs": true
+    },
+    "files.watcherExclude": {
+        "out/build/**": true,
+        "**/.vs/**": true
+    },
+    "editor.rulers": [100],
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true,
+    "[cpp]": {
+        "editor.defaultFormatter": "ms-vscode.cpptools",
+        "editor.formatOnSave": true
+    }
+}

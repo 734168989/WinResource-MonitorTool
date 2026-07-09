@@ -108,16 +108,17 @@
 | FR-UI-02 | 进程独立 Tab 页 | P0 | 每个启用的监测进程一个 Tab，显示时间/运行时间/PID/CPU/内存/网络 |
 | FR-UI-03 | 实时数据刷新 | P0 | 200ms 定时器增量更新 ListView |
 | FR-UI-04 | 自动滚动 | P1 | 新数据自动滚动到底部 |
-| FR-UI-05 | 数据上限 | P0 | DataBuffer 环形缓冲区 10000 行，ListView 同步裁剪 |
+| FR-UI-05 | 数据上限 | P0 | DataBuffer 环形缓冲区 200 万行（~115天@5s），ListView 显示窗口 5 万行 |
 | FR-UI-06 | 列宽自适应 | P2 | 时间列固定 135px，其余列 `LVSCW_AUTOSIZE_USEHEADER` |
 | FR-UI-07 | 右键菜单 | P1 | 清除日志 / 全选 / 复制选中（Tab 分隔，可直接粘贴到 Excel） |
 | FR-UI-08 | 彩色状态标签 | P1 | 就绪=绿色 / 监测中=红色 / 保存中=橙色 |
+| FR-UI-09 | 日志显示规则 | P1 | ListView 保留最近 5 万行（性能优化），DataBuffer 保留全部（最多 200 万行）；清除日志仅清空 ListView 显示，不影响 DataBuffer 和 Excel 导出 |
 
 ### 3.4 数据导出
 
 | ID | 功能 | 优先级 | 说明 |
 |----|------|--------|------|
-| FR-EXPORT-01 | 自动导出 XLSX | P0 | 停止监测时自动导出，含时间戳文件名 |
+| FR-EXPORT-01 | 自动导出 XLSX | P0 | 监测中每 2 秒实时写入，停止时最终保存；含时间戳文件名 |
 | FR-EXPORT-02 | 多 Sheet 支持 | P0 | Sheet1=系统资源，Sheet2+=各进程独立工作表 |
 | FR-EXPORT-03 | 实时写入 | P0 | 监测中每 2 秒刷新 Excel 文件（文件锁定，外部只读可查看） |
 | FR-EXPORT-04 | 单元格居中 | P2 | 表头和数据均水平垂直居中 |
@@ -153,10 +154,10 @@
 |------|------|
 | UI 刷新频率 | 200ms |
 | 采样周期范围 | 1-60 秒（用户配置） |
-| 数据缓冲区上限 | 10000 条/进程（约 13.9 小时 @5s 采样） |
+| 数据缓冲区上限 | 2000000 条/进程（~115 天 @5s 采样） |
 | Excel 实时刷新间隔 | 2 秒 |
 | 监测线程优先级 | `THREAD_PRIORITY_BELOW_NORMAL` |
-| 内存占用（程序自身） | < 50 MB（含 10000 条数据） |
+| 内存占用（程序自身） | < 200 MB（含 500000 条数据） |
 | CPU 占用（程序自身） | < 1%（@5s 采样周期） |
 
 ### 4.2 兼容性要求
@@ -212,7 +213,7 @@
 ├──────────────────┴────────────────────────────────┤
 │  NetSpeedMonitor    │  DataBuffer (thread-safe)       │
 │  · GetExtendedTcpTable   · CRITICAL_SECTION           │
-│  · Per-TCP-estats (API)  · Ring buffer (10000 rows)   │
+│  · Per-TCP-estats (API)  · Ring buffer (2000000 rows)   │
 │  · Per-PID 字节聚合      · System + per-process data  │
 ├───────────────────────────────────────────────────┤
 │  ConfigManager    │  ExcelExporter                │
@@ -484,7 +485,7 @@ struct MonitorConfig {
 ### 9.2 文件结构
 
 ```
-资源监测数据_20260709_143022.xlsx
+monitor_data_20260709_143022.xlsx
 ├── [Content_Types].xml
 ├── _rels/.rels
 ├── xl/
@@ -505,12 +506,29 @@ struct MonitorConfig {
 | 数据行 | 正常、居中（水平+垂直）、Microsoft YaHei 11pt |
 | 列宽 | 根据表头文字计算（CJK ≈2.2单位，ASCII ≈1.1单位，最小8单位） |
 
-### 9.4 实时刷新模式
+### 9.4 实时刷新与保存规则
 
+**监测过程中（实时保存）**：
 - 监测开始时调用 `BeginExport()`，创建文件并保持句柄打开（`GENERIC_READ|GENERIC_WRITE`，`FILE_SHARE_READ`）
-- 每 2 秒调用 `FlushExport()` 重写整个 ZIP 到同一文件句柄
+- 每 2 秒调用 `FlushExport()` 重写整个 ZIP 到同一文件句柄（增量覆盖）
 - 外部程序可以只读方式打开查看（实时更新需关闭后重新打开）
-- 停止监测时调用 `EndExport()` 关闭句柄
+- 即使软件异常崩溃，最后一次成功写入的数据保留在磁盘上
+
+**停止监测时（最终保存）**：
+- 调用 `FlushExport()` 执行最后一次完整写入
+- 调用 `EndExport()` 关闭文件句柄，释放文件锁定
+- 弹出提示框，显示文件保存路径
+
+**文件命名规则**：
+- 格式：`monitor_data_YYYYMMDD_HHMMSS.xlsx`
+- 时间戳为监测**开始**时间，每次开始新监测创建新文件
+- 文件保存在用户指定的输出目录（默认 exe 所在目录）
+- 同一目录下多次监测不会互相覆盖（时间戳不同）
+
+**数据完整性**：
+- 内存 DataBuffer 上限 200 万行（~115 天 @5s 采样），超过后环形裁剪最旧数据
+- ListView 显示窗口 5 万行，仅影响界面显示，不影响 DataBuffer 和 Excel 导出
+- 右键「清除日志」仅清空 ListView 显示行，不清除 DataBuffer 数据
 
 ---
 
@@ -522,8 +540,8 @@ struct MonitorConfig {
 | 进程网络 = TCP/IP 层 | 不包含 UDP 或其他协议流量 | 对多数应用（HTTP/HTTPS/WebSocket）影响小 |
 | 无进程磁盘 I/O | 不采集磁盘读写 | 大多数挂机场景对磁盘不敏感 |
 | 同名进程匹配依赖进程名 | 必须精确匹配（不区分大小写），不支持通配符 | 提供智能确认（未运行的进程名提示确认） |
-| 数据缓冲区 10000 行上限 | 超过后最旧数据被丢弃 | 可调节 `MAX_ROWS` 常量 |
-| ListView 10000 行上限 | 显示超过也裁剪最旧行 | 配合 DataBuffer 同步裁剪 |
+| 数据缓冲区 200 万行上限 | 超过后最旧数据被丢弃（~115 天 @5s） | 可调节 `MAX_ROWS` 常量 |
+| ListView 5 万行显示窗口 | 超过后裁剪最旧行，DataBuffer 数据完整保留 | 配合 DataBuffer 独立裁剪 |
 | Excel 无压缩 | 文件体积较大 | store 模式保持代码简单，文件大小通常可接受 |
 
 ---

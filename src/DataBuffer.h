@@ -37,5 +37,5 @@ private:
     std::vector<SystemMonitorData> m_systemData;
     std::map<std::wstring, std::vector<ProcessMonitorData>> m_processData;
 
-    static constexpr size_t MAX_ROWS = 10000;
+    static constexpr size_t MAX_ROWS = 2000000;
 };

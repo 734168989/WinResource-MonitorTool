@@ -105,6 +105,9 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         s->lastFlushTick = 0;
         s->statusBarHeight = 28;
 
+        // Display offset tracking
+        s->m_sysDisplayOffset = 0;
+
         // Default listview column widths
         s->sysColWidths[0] = 135; s->sysColWidths[1] = 100;
         s->sysColWidths[2] = 70;  s->sysColWidths[3] = 110;
@@ -1019,6 +1022,10 @@ void StartMonitoring(MainWindowState* s) {
     for (auto& tab : s->processTabs)
         ListView_DeleteAllItems(tab.hListView);
 
+    // Reset display offsets
+    s->m_sysDisplayOffset = 0;
+    s->m_procDisplayOffsets.clear();
+
     // Setup system monitor — SetNetInterface MUST be called before Initialize()
     // because Initialize() captures the baseline using m_netInterface
     s->systemMonitor.SetNetUnit(cfg.netUnit);
@@ -1087,6 +1094,10 @@ void StopMonitoring(MainWindowState* s) {
     }
 
     s->isMonitoring = false;
+
+    // Reset display offsets
+    s->m_sysDisplayOffset = 0;
+    s->m_procDisplayOffsets.clear();
 
     // Show saving indicator
     UpdateStatus(s, L"状态: 正在保存中…", RGB(255, 165, 0));  // orange
@@ -1176,56 +1187,60 @@ void UpdateSystemListView(MainWindowState* s) {
     const auto& sysData = s->dataBuffer.GetSystemDataRef();
     int totalCount = (int)sysData.size();
 
-    // Use actual ListView item count instead of a tracked index,
-    // so display stays correct even when DataBuffer trims old entries.
+    // Use actual ListView item count + display offset to find new items.
+    // This stays correct even when ListView is trimmed for display performance.
     int displayedCount = ListView_GetItemCount(s->hSystemListView);
+    int startIdx = s->m_sysDisplayOffset + displayedCount;
 
     // Add new items since last display
-    for (int i = displayedCount; i < totalCount; i++) {
+    for (int i = startIdx; i < totalCount; i++) {
         const auto& d = sysData[i];
+        int lvIdx = displayedCount + (i - startIdx);  // ListView row index
 
         wchar_t buf[64];
         LVITEMW item = {};
         item.mask = LVIF_TEXT;
-        item.iItem = i;
+        item.iItem = lvIdx;
 
         item.iSubItem = SYS_COL_TIME;
         item.pszText = (LPWSTR)d.timestamp;
-        if (i == displayedCount) {
+        if (i == startIdx) {
             ListView_InsertItem(s->hSystemListView, &item);
         }
-        ListView_SetItemText(s->hSystemListView, i, SYS_COL_TIME, (LPWSTR)d.timestamp);
+        ListView_SetItemText(s->hSystemListView, lvIdx, SYS_COL_TIME, (LPWSTR)d.timestamp);
 
         swprintf_s(buf, 64, L"%.2f", d.runSeconds);
-        ListView_SetItemText(s->hSystemListView, i, SYS_COL_RUN_SEC, buf);
+        ListView_SetItemText(s->hSystemListView, lvIdx, SYS_COL_RUN_SEC, buf);
 
         swprintf_s(buf, 64, L"%.2f", d.cpuUsage);
-        ListView_SetItemText(s->hSystemListView, i, SYS_COL_CPU, buf);
+        ListView_SetItemText(s->hSystemListView, lvIdx, SYS_COL_CPU, buf);
 
         swprintf_s(buf, 64, L"%.2f", d.memoryTotalGB);
-        ListView_SetItemText(s->hSystemListView, i, SYS_COL_MEM_TOTAL, buf);
+        ListView_SetItemText(s->hSystemListView, lvIdx, SYS_COL_MEM_TOTAL, buf);
 
         swprintf_s(buf, 64, L"%.2f", d.memoryAvailableGB);
-        ListView_SetItemText(s->hSystemListView, i, SYS_COL_MEM_AVAIL, buf);
+        ListView_SetItemText(s->hSystemListView, lvIdx, SYS_COL_MEM_AVAIL, buf);
 
         swprintf_s(buf, 64, L"%.2f", d.memoryUsedGB);
-        ListView_SetItemText(s->hSystemListView, i, SYS_COL_MEM_USED, buf);
+        ListView_SetItemText(s->hSystemListView, lvIdx, SYS_COL_MEM_USED, buf);
 
         swprintf_s(buf, 64, L"%.2f", d.memoryUsage);
-        ListView_SetItemText(s->hSystemListView, i, SYS_COL_MEM_USAGE, buf);
+        ListView_SetItemText(s->hSystemListView, lvIdx, SYS_COL_MEM_USAGE, buf);
 
         swprintf_s(buf, 64, L"%.2f", d.netSendSpeed);
-        ListView_SetItemText(s->hSystemListView, i, SYS_COL_NET_SEND, buf);
+        ListView_SetItemText(s->hSystemListView, lvIdx, SYS_COL_NET_SEND, buf);
 
         swprintf_s(buf, 64, L"%.2f", d.netRecvSpeed);
-        ListView_SetItemText(s->hSystemListView, i, SYS_COL_NET_RECV, buf);
+        ListView_SetItemText(s->hSystemListView, lvIdx, SYS_COL_NET_RECV, buf);
     }
 
-    // Trim if too many items (keep last 10000)
+    // Trim ListView for display performance (keep last N items).
+    // This only affects display; DataBuffer retains all data for Excel export.
+    const int MAX_DISPLAY_ROWS = 50000;
     int currentItems = ListView_GetItemCount(s->hSystemListView);
-    int maxItems = 10000;
-    while (currentItems > maxItems) {
+    while (currentItems > MAX_DISPLAY_ROWS) {
         ListView_DeleteItem(s->hSystemListView, 0);
+        s->m_sysDisplayOffset++;  // first visible DataBuffer index moves forward
         currentItems--;
     }
 
@@ -1240,51 +1255,56 @@ void UpdateProcessListView(MainWindowState* s, ProcessTabInfo& tab) {
 
     int totalCount = (int)procData->size();
 
-    // Use actual ListView item count to stay in sync with DataBuffer trimming
+    // Use actual ListView item count + display offset to find new items
     int displayedCount = ListView_GetItemCount(tab.hListView);
+    int offset = s->m_procDisplayOffsets[tab.processName];  // defaults to 0
+    int startIdx = offset + displayedCount;
 
-    for (int i = displayedCount; i < totalCount; i++) {
+    for (int i = startIdx; i < totalCount; i++) {
         const auto& d = (*procData)[i];
+        int lvIdx = displayedCount + (i - startIdx);  // ListView row index
 
         wchar_t buf[64];
         LVITEMW item = {};
         item.mask = LVIF_TEXT;
-        item.iItem = i;
+        item.iItem = lvIdx;
 
-        if (i == displayedCount) {
+        if (i == startIdx) {
             item.iSubItem = PROC_COL_TIME;
             item.pszText = (LPWSTR)d.timestamp;
             ListView_InsertItem(tab.hListView, &item);
         }
 
-        ListView_SetItemText(tab.hListView, i, PROC_COL_TIME, (LPWSTR)d.timestamp);
+        ListView_SetItemText(tab.hListView, lvIdx, PROC_COL_TIME, (LPWSTR)d.timestamp);
 
         swprintf_s(buf, 64, L"%.2f", d.runSeconds);
-        ListView_SetItemText(tab.hListView, i, PROC_COL_RUN_SEC, buf);
+        ListView_SetItemText(tab.hListView, lvIdx, PROC_COL_RUN_SEC, buf);
 
         swprintf_s(buf, 64, L"%lu", d.pid);
-        ListView_SetItemText(tab.hListView, i, PROC_COL_PID, buf);
+        ListView_SetItemText(tab.hListView, lvIdx, PROC_COL_PID, buf);
 
         swprintf_s(buf, 64, L"%.2f", d.cpuUsage);
-        ListView_SetItemText(tab.hListView, i, PROC_COL_CPU, buf);
+        ListView_SetItemText(tab.hListView, lvIdx, PROC_COL_CPU, buf);
 
         swprintf_s(buf, 64, L"%.2f", d.memoryUsage);
-        ListView_SetItemText(tab.hListView, i, PROC_COL_MEM_USAGE, buf);
+        ListView_SetItemText(tab.hListView, lvIdx, PROC_COL_MEM_USAGE, buf);
 
         swprintf_s(buf, 64, L"%.2f", d.memoryUsedMB);
-        ListView_SetItemText(tab.hListView, i, PROC_COL_MEM_USED, buf);
+        ListView_SetItemText(tab.hListView, lvIdx, PROC_COL_MEM_USED, buf);
 
         swprintf_s(buf, 64, L"%.2f", d.netSendSpeed);
-        ListView_SetItemText(tab.hListView, i, PROC_COL_NET_SEND, buf);
+        ListView_SetItemText(tab.hListView, lvIdx, PROC_COL_NET_SEND, buf);
 
         swprintf_s(buf, 64, L"%.2f", d.netRecvSpeed);
-        ListView_SetItemText(tab.hListView, i, PROC_COL_NET_RECV, buf);
+        ListView_SetItemText(tab.hListView, lvIdx, PROC_COL_NET_RECV, buf);
     }
 
-    // Trim if too many items (keep last 10000)
+    // Trim ListView for display performance (keep last N items)
+    const int MAX_DISPLAY_ROWS = 50000;
     int currentItems = ListView_GetItemCount(tab.hListView);
-    while (currentItems > 10000) {
+    while (currentItems > MAX_DISPLAY_ROWS) {
         ListView_DeleteItem(tab.hListView, 0);
+        s->m_procDisplayOffsets[tab.processName]++;
         currentItems--;
     }
 
@@ -1648,9 +1668,26 @@ static const wchar_t* g_helpContents[] = {
     L"   • 支持勾选启用/禁用单个进程，日志页签实时更新\r\n"
     L"   • 页签名称自动隐藏 .exe 后缀\r\n"
     L"\r\n"
-    L"5. Excel 数据导出\r\n"
-    L"   停止监测后自动导出为 .xlsx 文件，单元格居中对齐、列宽\r\n"
-    L"   自适应，包含系统工作表和各进程独立工作表，文件名带时戳。\r\n"
+    L"5. 数据保存与日志\r\n"
+    L"   ■ 日志显示（界面 ListView）\r\n"
+    L"     • 监测过程中实时刷新，保留最近 5 万行数据用于查看\r\n"
+    L"     • 超过 5 万行自动裁剪最旧行，不影响数据采集和导出\r\n"
+    L"     • 右键菜单支持「清除日志」「全选」「复制选中」\r\n"
+    L"   ■ Excel 自动保存\r\n"
+    L"     • 监测中每 2 秒自动将全部数据实时写入 .xlsx 文件\r\n"
+    L"     • 文件被锁定（外部只能以只读方式打开查看最新数据）\r\n"
+    L"     • 点击「停止监测」时执行最终保存，关闭文件锁定\r\n"
+    L"     • 文件名格式：monitor_data_开始时间戳.xlsx\r\n"
+    L"     • 保存在用户指定的输出目录（默认 exe 所在目录）\r\n"
+    L"     • 即使软件崩溃，已写入的数据不会丢失\r\n"
+    L"     • 每次开始新监测会创建新文件（新时间戳），不会覆盖旧文件\r\n"
+    L"   ■ 数据结构\r\n"
+    L"     • Sheet1「系统资源」：时间/运行时间/CPU/内存各项/网络收发\r\n"
+    L"     • Sheet2+ 各进程独立工作表（Sheet 名自动去掉 .exe 后缀）\r\n"
+    L"     • 表头加粗、单元格居中、列宽自适应、Microsoft YaHei 字体\r\n"
+    L"   ■ 数据容量\r\n"
+    L"     • 内存缓冲区上限 200 万行（~115 天 @5s 采样）\r\n"
+    L"     • Excel 文件包含全部数据，可长期运行不断采集\r\n"
     L"\r\n"
     L"6. 其他功能\r\n"
     L"   • 窗口置顶：点击\"置顶\"按钮使窗口始终在最前\r\n"
@@ -1685,7 +1722,15 @@ static const wchar_t* g_helpContents[] = {
     L"  锁定，状态标签变为红色\"状态: 监测中\"。\r\n"
     L"\r\n"
     L"步骤 7 — 停止与导出\r\n"
-    L"  点击\"停止监测\"按钮，数据自动导出为 Excel 文件并弹出提示。",
+    L"  点击\"停止监测\"按钮，数据自动导出为 Excel 文件并弹出提示。\r\n"
+    L"  监测过程中数据已实时写入文件，可在输出目录以只读方式打开\r\n"
+    L"  查看最新数据。\r\n"
+    L"\r\n"
+    L"  数据保存规则：\r\n"
+    L"  • 监测中：每 2 秒自动刷新 Excel 文件（实时保存，防崩溃丢失）\r\n"
+    L"  • 停止时：最终保存并释放文件（外部可正常打开编辑）\r\n"
+    L"  • 界面日志：保留最近 5 万行，旧数据自动裁剪（数据仍完整导出）\r\n"
+    L"  • 文件位置：输出目录 +「monitor_data_时间戳.xlsx」",
 
     // Tab 3: 使用窍门
     L"【使用窍门】\r\n"
@@ -1740,10 +1785,24 @@ static const wchar_t* g_helpContents[] = {
     L"   • 需管理员权限（启动时 UAC 提权）才能启用统计追踪\r\n"
     L"   • 未提权时进程网络显示 0.00，系统网络不受影响\r\n"
     L"\r\n"
-    L"4. Excel 导出\r\n"
-    L"   • 仅在停止监测时自动导出\r\n"
-    L"   • 文件名格式：资源监测数据_YYYYMMDD_HHMMSS.xlsx\r\n"
-    L"   • 导出需要目标目录写入权限\r\n"
+    L"4. 数据保存与日志说明\r\n"
+    L"   ■ 日志（界面 ListView 显示）\r\n"
+    L"     • 显示最近 5 万行数据，旧数据自动裁剪以保持界面流畅\r\n"
+    L"     • 裁剪仅影响界面显示，DataBuffer 中数据完整保留用于导出\r\n"
+    L"     • 右键菜单可「清除日志」清空当前显示（不清除后台数据）\r\n"
+    L"   ■ Excel 实时保存\r\n"
+    L"     • 监测开始即创建 Excel 文件，每 2 秒刷新写入全部数据\r\n"
+    L"     • 文件被程序锁定（FILE_SHARE_READ），外部只能只读打开\r\n"
+    L"     • 即使软件异常崩溃，最后一次写入的数据不会丢失\r\n"
+    L"     • 点击「停止监测」执行最终保存并关闭锁定\r\n"
+    L"   ■ 文件命名规则\r\n"
+    L"     • 格式：monitor_data_YYYYMMDD_HHMMSS.xlsx\r\n"
+    L"     • 时间戳为监测开始时间，每次开始新监测创建新文件\r\n"
+    L"     • 文件保存在用户指定的输出目录（默认 exe 所在目录）\r\n"
+    L"   ■ 数据容量\r\n"
+    L"     • 内存缓冲区上限 200 万行（约 115 天 @5s 采样）\r\n"
+    L"     • 超过上限后最旧数据被丢弃（DataBuffer 环形缓冲）\r\n"
+    L"     • Excel 文件大小随数据量增长，建议定期停止监测导出新文件\r\n"
     L"\r\n"
     L"5. 权限说明\r\n"
     L"   进程级网络监测需要 ETW 内核追踪会话，必须以管理员权限\r\n"

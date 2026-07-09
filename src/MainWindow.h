@@ -125,6 +125,11 @@ struct MainWindowState {
     HFONT hDefaultFont;
     HFONT hBoldFont;           // 粗体状态标签
 
+    // Display offset tracking: DataBuffer index of the first ListView row.
+    // Fixes index sync when ListView is trimmed for display performance.
+    int m_sysDisplayOffset;
+    std::map<std::wstring, int> m_procDisplayOffsets;
+
     // Config path
     wchar_t configPath[MAX_PATH];
 

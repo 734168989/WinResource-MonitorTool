@@ -5,7 +5,7 @@
 
 #define MAX_PROCESS_NAME 260
 #define MAX_TIMESTAMP_LEN 20
-#define MAX_BUFFER_ROWS 10000
+#define MAX_BUFFER_ROWS 2000000
 
 struct SystemMonitorData {
     wchar_t timestamp[MAX_TIMESTAMP_LEN];

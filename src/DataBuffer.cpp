@@ -3,7 +3,9 @@
 
 DataBuffer::DataBuffer() {
     InitializeCriticalSection(&m_cs);
-    m_systemData.reserve(MAX_ROWS + 100);
+    // Reserve a reasonable starting capacity; vector will grow as needed.
+    // MAX_ROWS (2M) is a safety cap, not the initial allocation.
+    m_systemData.reserve(10000);
 }
 
 DataBuffer::~DataBuffer() {

@@ -76,9 +76,9 @@
 |----|------|--------|-----|------|
 | FR-SYS-01 | CPU 使用率 | P0 | `GetSystemTimes()` + QPC 差分 | 0.01% |
 | FR-SYS-02 | 内存总量/可用/已用/使用率 | P0 | `GlobalMemoryStatusEx()` | 0.01 GB |
-| FR-SYS-03 | 网络发送/接收速度 | P0 | `GetIfTable2()` 64位计数器差分 | 0.01 KB/s |
+| FR-SYS-03 | 网络发送/接收速度 | P0 | `GetIfTable2()` 64位计数器差分 | 0.01 Kbps |
 | FR-SYS-04 | 网卡筛选 | P1 | `GetAdaptersAddresses(flags=0)` | — |
-| FR-SYS-05 | 速度单位切换 | P1 | KB/s / MB/s / GB/s | — |
+| FR-SYS-05 | 速度单位切换 | P1 | Kbps / Mbps / Gbps，默认 Mbps | — |
 
 **网卡过滤规则**: `flags=0` (仅 TCP/IP 绑定适配器) → `IfType` 过滤为物理类型 (以太网 / Wi-Fi) → `HardwareInterface==TRUE` (排除虚拟适配器)。结果与 `ncpa.cpl`（网络连接）完全一致。
 
@@ -89,7 +89,7 @@
 | FR-PROC-01 | 按进程名添加监控 | P0 | 输入进程名（如 `QQ.exe`） | — |
 | FR-PROC-02 | 进程 CPU 使用率 | P0 | `GetProcessTimes()` + QPC 差分 | 0.01% |
 | FR-PROC-03 | 进程内存（专用工作集） | P0 | `PROCESS_MEMORY_COUNTERS_EX2.PrivateWorkingSetSize` | 0.01 MB |
-| FR-PROC-04 | 进程网络速度 | P0 | ETW 内核追踪 TCP/IP 事件 + `TdhGetProperty` | 0.01 KB/s |
+| FR-PROC-04 | 进程网络速度 | P0 | `GetPerTcpConnectionEStats` TCP连接字节计数器 | 0.01 Kbps |
 | FR-PROC-05 | 同名多进程全记录 | P1 | `CreateToolhelp32Snapshot` 遍历全部匹配 PID | — |
 | FR-PROC-06 | 进程存活检测 | P0 | `QueryFullProcessImageNameW` 校验 + 自动重新绑定 | — |
 | FR-PROC-07 | 进程列表管理 | P0 | 添加/删除/全部删除/勾选启用禁用/配置保存 | — |
@@ -98,7 +98,7 @@
 
 **进程内存说明**: 使用 `PrivateWorkingSetSize`（专用工作集），与任务管理器「详细信息」→「内存(专用工作集)」列一致。老旧 Windows (Win7) 自动回退到 `PrivateUsage`（提交大小）。
 
-**进程网络说明**: 基于 ETW 内核追踪捕获 TCP/IP Send/Recv 事件，按 PID 聚合字节数，配合采样周期计算 KB/s。需要管理员权限（`requireAdministrator` 清单）。
+**进程网络说明**: 通过 `GetExtendedTcpTable` 枚举所有 TCP 连接（按 PID 过滤），再使用 `GetPerTcpConnectionEStats` 直接读取每个连接的 `DataBytesOut`/`DataBytesIn` 字节计数器。两次采样间计算增量即为网络速度。需管理员权限调用 `SetPerTcpConnectionEStats` 启用统计追踪。
 
 ### 3.3 数据展示
 
@@ -210,10 +210,10 @@
 │  · GetIfTable2    │  · PROC_MEM_COUNTERS_EX2      │
 │  · QPC 计时       │  · QPC 计时                   │
 ├──────────────────┴────────────────────────────────┤
-│  NetSpeedMonitor  │  DataBuffer (thread-safe)     │
-│  · ETW kernel     │  · CRITICAL_SECTION           │
-│  · TcpIp events   │  · Ring buffer (10000 rows)   │
-│  · TdhGetProperty │  · System + per-process data  │
+│  NetSpeedMonitor    │  DataBuffer (thread-safe)       │
+│  · GetExtendedTcpTable   · CRITICAL_SECTION           │
+│  · Per-TCP-estats (API)  · Ring buffer (10000 rows)   │
+│  · Per-PID 字节聚合      · System + per-process data  │
 ├───────────────────────────────────────────────────┤
 │  ConfigManager    │  ExcelExporter                │
 │  · JSON 解析器    │  · XLSX 多Sheet 生成器         │
@@ -229,7 +229,7 @@
 | **MainWindow** | `MainWindow.h/cpp` | Win32 窗口管理、控件创建、消息处理、监测线程控制、ListView 显示更新 |
 | **SystemMonitor** | `SystemMonitor.h/cpp` | 系统级 CPU/内存/网络采集，网卡枚举与过滤 |
 | **ProcessMonitor** | `ProcessMonitor.h/cpp` | 进程级 CPU/内存采集，多 PID 管理，Per-PID CPU 基线 |
-| **NetSpeedMonitor** | `NetSpeedMonitor.h/cpp` | ETW 内核追踪，TCP/IP 事件捕获，Per-PID 字节聚合 |
+| **NetSpeedMonitor** | `NetSpeedMonitor.h/cpp` | TCP连接统计，GetExtendedTcpTable 枚举连接，GetPerTcpConnectionEStats 读取字节计数器 |
 | **DataBuffer** | `DataBuffer.h/cpp` | 线程安全环形缓冲区，系统数据和进程数据分开存储 |
 | **ConfigManager** | `ConfigManager.h/cpp` | JSON 配置文件读写，手写解析器/序列化器 |
 | **ExcelExporter** | `ExcelExporter.h/cpp` | OpenXML `.xlsx` 生成（无外部库），多 Sheet，实时刷新模式 |
@@ -281,21 +281,16 @@ MonitorThreadProc (线程)              UI Timer (200ms)
 ### 6.2 进程网络数据流
 
 ```
-ETW Kernel Session (系统级)
-     │
-     ├─ TcpIp_SendIPV4 event (PID, size)
-     ├─ TcpIp_RecvIPV4 event (PID, size)
-     └─ ...
-
-NetSpeedMonitor::EventRecordCallback()
-     │
-     └─ TdhGetProperty("PID") + TdhGetProperty("size")
-        └─ m_liveCounters[PID].sent/recv += size
-
 ProcessMonitor::Collect(runSeconds, netMon)
      │
      └─ netMon->QueryDelta(pid, deltaSent, deltaRecv)
-        └─ (deltaSent / elapsedSec) → KB/s / MB/s / GB/s
+        │
+        ├─ GetExtendedTcpTable(TCP_TABLE_OWNER_PID_CONNECTIONS)
+        │  └─ 过滤 dwOwningPid == pid 的 TCP 连接
+        │
+        ├─ SetPerTcpConnectionEStats() [首次] 启用统计追踪
+        └─ GetPerTcpConnectionEStats(Rod=DATA_ROD_v0)
+           └─ DataBytesOut / DataBytesIn → 求和 → 与上次采样求增量
 ```
 
 ### 6.3 配置数据流
@@ -344,7 +339,7 @@ struct MonitorConfig {
     int    processCapacity;
     bool   monitorCpu, monitorMemory, monitorNetwork;
     int    samplePeriod;       // 1-60 秒
-    wchar_t netUnit[16];       // "KB/s" / "MB/s" / "GB/s"
+    wchar_t netUnit[16];       // "Kbps" / "Mbps" / "Gbps"
     wchar_t netInterface[256]; // 网卡名 或 "全部"
     wchar_t outputDir[MAX_PATH];
 };
@@ -368,7 +363,7 @@ struct MonitorConfig {
 │ │ └──┴──────────┴──────┘                      │ │
 │ └────────────────────────────────────────────┘ │
 │ ┌─ 监测项目设置 ──────────────────────────────┐ │
-│ │ ☑CPU ☑内存 ☑网速 [KB/s▼]                   │ │
+│ │ ☑CPU ☑内存 ☑网速 [Mbps▼]                   │ │
 │ │ 采样周期:[5]秒   网卡选择:[全部▼][刷新]      │ │
 │ │ 输出目录:[___________][浏览]                 │ │
 │ └────────────────────────────────────────────┘ │
@@ -392,7 +387,7 @@ struct MonitorConfig {
 | 进程名输入框 | Edit | 空 | 输入后点「添加」 |
 | 进程列表 | ListView (Checkboxes) | — | 第1列=勾选，第2列=名称，第3列=操作(删除) |
 | 采样周期 | Edit (ES_NUMBER) | 5 | 1-60 秒 |
-| 网速单位 | ComboBox | KB/s | KB/s / MB/s / GB/s |
+| 网速单位 | ComboBox | Mbps | Kbps / Mbps / Gbps |
 | 网卡选择 | ComboBox | 全部 | 动态获取，点「刷新」更新 |
 | 输出目录 | Edit | exe所在目录 | 点「浏览」选择文件夹 |
 
@@ -409,8 +404,8 @@ struct MonitorConfig {
 | 内存可用(GB) | 浮点数 | auto | 左 |
 | 内存使用(GB) | 浮点数 | auto | 左 |
 | 内存使用率(%) | 0.00-100.00 | auto | 左 |
-| 网络发送(KB/s) | 浮点数 | auto | 左 |
-| 网络接收(KB/s) | 浮点数 | auto | 左 |
+| 网络发送(Kbps) | 浮点数 | auto | 左 |
+| 网络接收(Kbps) | 浮点数 | auto | 左 |
 
 **进程 Tab:**
 
@@ -422,8 +417,8 @@ struct MonitorConfig {
 | CPU(%) | 0.00-100.00 | auto | 左 |
 | 内存使用率(%) | 0.00-100.00 | auto | 左 |
 | 内存使用(MB) | 浮点数 | auto | 左 |
-| 网络发送(KB/s) | 浮点数 | auto | 左 |
-| 网络接收(KB/s) | 浮点数 | auto | 左 |
+| 网络发送(Kbps) | 浮点数 | auto | 左 |
+| 网络接收(Kbps) | 浮点数 | auto | 左 |
 
 ---
 
@@ -449,7 +444,7 @@ struct MonitorConfig {
     "network": true
   },
   "samplePeriod": 5,
-  "netUnit": "KB/s",
+  "netUnit": "Mbps",
   "netInterface": "全部",
   "outputDir": "C:\\MonitorData"
 }
@@ -464,7 +459,7 @@ struct MonitorConfig {
 | `monitorItems.memory` | bool | 是 | `true` | — |
 | `monitorItems.network` | bool | 是 | `true` | — |
 | `samplePeriod` | int | 是 | `5` | 1-60 |
-| `netUnit` | string | 是 | `"KB/s"` | `"KB/s"` / `"MB/s"` / `"GB/s"` |
+| `netUnit` | string | 是 | `"Mbps"` | `"Kbps"` / `"Mbps"` / `"Gbps"` |
 | `netInterface` | string | 是 | `"全部"` | 网卡名或 `"全部"` |
 | `outputDir` | string | 是 | exe所在目录 | 有效路径 |
 

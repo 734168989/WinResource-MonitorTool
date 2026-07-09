@@ -43,7 +43,7 @@ struct MonitorConfig {
     bool            monitorMemory;
     bool            monitorNetwork;
     int             samplePeriod;       // 1-60 seconds
-    wchar_t         netUnit[16];        // "KB/s", "MB/s", "GB/s"
+    wchar_t         netUnit[16];        // "Kbps", "Mbps", "Gbps"
     wchar_t         netInterface[256];  // interface name or "全部"
     wchar_t         outputDir[MAX_PATH];
 };
@@ -57,7 +57,7 @@ inline void InitEmptyConfig(MonitorConfig* cfg) {
     cfg->monitorMemory = true;
     cfg->monitorNetwork = true;
     cfg->samplePeriod = 5;
-    wcscpy_s(cfg->netUnit, 16, L"KB/s");
+    wcscpy_s(cfg->netUnit, 16, L"Mbps");
     wcscpy_s(cfg->netInterface, 256, L"全部");
     wchar_t exePath[MAX_PATH];
     GetModuleFileNameW(nullptr, exePath, MAX_PATH);
@@ -77,7 +77,7 @@ inline void InitDefaultConfig(MonitorConfig* cfg) {
     cfg->monitorMemory = true;
     cfg->monitorNetwork = true;
     cfg->samplePeriod = 5;
-    wcscpy_s(cfg->netUnit, 16, L"KB/s");
+    wcscpy_s(cfg->netUnit, 16, L"Mbps");
     wcscpy_s(cfg->netInterface, 256, L"全部");
     // 默认输出目录为 exe 所在目录
     wchar_t exePath[MAX_PATH];

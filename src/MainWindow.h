@@ -172,6 +172,7 @@ void UpdateProcessListView(MainWindowState* s, ProcessTabInfo& tab);
 // UI state
 void SetControlsEnabled(MainWindowState* s, bool enabled);
 void UpdateNetworkControlsEnabled(MainWindowState* s);
+void UpdateNetUnitHeaders(MainWindowState* s, const wchar_t* unit);
 void UpdateStatus(MainWindowState* s, const wchar_t* status, COLORREF color);
 
 // Data export

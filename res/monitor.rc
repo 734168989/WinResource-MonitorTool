@@ -1,6 +1,10 @@
 // monitor.rc - Resource definitions
 #include <windows.h>
 #include <commctrl.h>
+#include "../src/resource.h"
+
+// Application icon
+IDI_MAIN_ICON ICON "MonitorTool.ico"
 
 // Version info
 VS_VERSION_INFO VERSIONINFO

@@ -25,7 +25,7 @@ typedef struct _PROCESS_MEMORY_COUNTERS_EX2 {
 
 ProcessMonitor::ProcessMonitor(const wchar_t* processName) {
     wcscpy_s(m_processName, 260, processName);
-    wcscpy_s(m_netUnit, 16, L"KB/s");
+    wcscpy_s(m_netUnit, 16, L"Mbps");
     m_lastCollectRunSeconds = -1.0;
     QueryPerformanceFrequency(&m_qpcFrequency);
 }
@@ -254,13 +254,13 @@ double ProcessMonitor::GetCollectElapsedSec(double runSeconds) {
 }
 
 double ProcessMonitor::ConvertBytesToUnit(double bytesPerSec) const {
-    if (wcscmp(m_netUnit, L"KB/s") == 0)
-        return floor((bytesPerSec / 1024.0) * 100.0 + 0.5) / 100.0;
-    else if (wcscmp(m_netUnit, L"MB/s") == 0)
-        return floor((bytesPerSec / (1024.0 * 1024.0)) * 100.0 + 0.5) / 100.0;
-    else if (wcscmp(m_netUnit, L"GB/s") == 0)
-        return floor((bytesPerSec / (1024.0 * 1024.0 * 1024.0)) * 100.0 + 0.5) / 100.0;
-    return floor((bytesPerSec / 1024.0) * 100.0 + 0.5) / 100.0;
+    if (wcscmp(m_netUnit, L"Kbps") == 0)
+        return floor((bytesPerSec * 8.0 / 1000.0) * 100.0 + 0.5) / 100.0;
+    else if (wcscmp(m_netUnit, L"Mbps") == 0)
+        return floor((bytesPerSec * 8.0 / 1000000.0) * 100.0 + 0.5) / 100.0;
+    else if (wcscmp(m_netUnit, L"Gbps") == 0)
+        return floor((bytesPerSec * 8.0 / 1000000000.0) * 100.0 + 0.5) / 100.0;
+    return floor((bytesPerSec * 8.0 / 1000.0) * 100.0 + 0.5) / 100.0;
 }
 
 void ProcessMonitor::Reset() {

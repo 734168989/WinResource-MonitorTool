@@ -14,7 +14,7 @@ SystemMonitor::SystemMonitor()
     , m_lastNetBytesSent(0), m_lastNetBytesRecv(0), m_lastNetTimestamp(0)
     , m_netInitialized(false)
 {
-    wcscpy_s(m_netUnit, 16, L"KB/s");
+    wcscpy_s(m_netUnit, 16, L"Mbps");
     wcscpy_s(m_netInterface, 256, L"全部");
     QueryPerformanceFrequency(&m_qpcFrequency);
     m_ifIndexToFriendly.clear();
@@ -244,13 +244,13 @@ void SystemMonitor::GetNetworkSpeed(double& sendSpeed, double& recvSpeed) {
 }
 
 double SystemMonitor::ConvertToUnit(double bytesPerSec) {
-    if (wcscmp(m_netUnit, L"KB/s") == 0)
-        return std::floor((bytesPerSec / 1024.0) * 100.0 + 0.5) / 100.0;
-    else if (wcscmp(m_netUnit, L"MB/s") == 0)
-        return std::floor((bytesPerSec / (1024.0 * 1024.0)) * 100.0 + 0.5) / 100.0;
-    else if (wcscmp(m_netUnit, L"GB/s") == 0)
-        return std::floor((bytesPerSec / (1024.0 * 1024.0 * 1024.0)) * 100.0 + 0.5) / 100.0;
-    return std::floor((bytesPerSec / 1024.0) * 100.0 + 0.5) / 100.0;
+    if (wcscmp(m_netUnit, L"Kbps") == 0)
+        return std::floor((bytesPerSec * 8.0 / 1000.0) * 100.0 + 0.5) / 100.0;
+    else if (wcscmp(m_netUnit, L"Mbps") == 0)
+        return std::floor((bytesPerSec * 8.0 / 1000000.0) * 100.0 + 0.5) / 100.0;
+    else if (wcscmp(m_netUnit, L"Gbps") == 0)
+        return std::floor((bytesPerSec * 8.0 / 1000000000.0) * 100.0 + 0.5) / 100.0;
+    return std::floor((bytesPerSec * 8.0 / 1000.0) * 100.0 + 0.5) / 100.0;
 }
 
 void SystemMonitor::SetNetUnit(const wchar_t* unit) {

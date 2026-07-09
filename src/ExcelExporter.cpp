@@ -370,7 +370,7 @@ static std::string BuildStylesXml() {
 // ExcelExporter implementation
 // ============================================================================
 ExcelExporter::ExcelExporter() {
-    wcscpy_s(m_netUnit, 16, L"KB/s");
+    wcscpy_s(m_netUnit, 16, L"Mbps");
     m_hFile = INVALID_HANDLE_VALUE;
     m_lastFilePath[0] = L'\0';
 }

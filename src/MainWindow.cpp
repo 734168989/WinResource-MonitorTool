@@ -338,6 +338,9 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                     ComboBox_GetLBText(s->hNetUnitCombo, idx, unit);
                     s->systemMonitor.SetNetUnit(unit);
                     s->excelExporter.SetNetUnit(unit);
+                    for (auto* pm : s->processMonitors)
+                        pm->SetNetUnit(unit);
+                    UpdateNetUnitHeaders(s, unit);
                 }
             }
             break;
@@ -560,10 +563,10 @@ void CreateChildControls(HWND hParent, MainWindowState* s) {
     s->hNetUnitCombo = CreateWindowExW(0, L"COMBOBOX", L"",
         WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
         203, itemsGroupY + iy, 80, 200, hParent, (HMENU)IDC_NET_UNIT_COMBO, hi, nullptr);
-    ComboBox_AddString(s->hNetUnitCombo, L"KB/s");
-    ComboBox_AddString(s->hNetUnitCombo, L"MB/s");
-    ComboBox_AddString(s->hNetUnitCombo, L"GB/s");
-    ComboBox_SetCurSel(s->hNetUnitCombo, 0);
+    ComboBox_AddString(s->hNetUnitCombo, L"Kbps");
+    ComboBox_AddString(s->hNetUnitCombo, L"Mbps");
+    ComboBox_AddString(s->hNetUnitCombo, L"Gbps");
+    ComboBox_SetCurSel(s->hNetUnitCombo, 1); // default: Mbps
 
     iy += 28;
     s->hSampleLabel = CreateWindowExW(0, L"STATIC", L"采样周期: ",
@@ -700,7 +703,7 @@ void InitSystemListView(MainWindowState* s) {
 
     const wchar_t* headers[] = {
         L"时间", L"运行时间(秒)", L"CPU(%)", L"内存总量(GB)",
-        L"内存可用(GB)", L"内存使用(GB)", L"内存使用率(%)", L"网络发送(KB/s)", L"网络接收(KB/s)"
+        L"内存可用(GB)", L"内存使用(GB)", L"内存使用率(%)", L"网络发送(Mbps)", L"网络接收(Mbps)"
     };
 
     LVCOLUMNW lvc = {};
@@ -728,7 +731,7 @@ HWND CreateProcessDataListView(HWND hParent, MainWindowState* s) {
 
     const wchar_t* headers[] = {
         L"时间", L"运行时间(秒)", L"进程ID", L"CPU(%)",
-        L"内存使用率(%)", L"内存使用(MB)", L"网络发送(KB/s)", L"网络接收(KB/s)"
+        L"内存使用率(%)", L"内存使用(MB)", L"网络发送(Mbps)", L"网络接收(Mbps)"
     };
 
     LVCOLUMNW lvc = {};
@@ -1036,7 +1039,9 @@ void StartMonitoring(MainWindowState* s) {
     s->lastFlushTick = 0;
 
     // Start ETW-based per-process network monitor (requires admin)
-    s->netSpeedMonitor.Start();
+    if (!s->netSpeedMonitor.Start()) {
+        OutputDebugStringW(L"[MainWindow] NetSpeedMonitor failed — process network will be 0\r\n");
+    }
 
     // Begin real-time Excel export (file locked, read-only for external viewers)
     s->excelExporter.SetNetUnit(cfg.netUnit);
@@ -1321,6 +1326,28 @@ void UpdateNetworkControlsEnabled(MainWindowState* s) {
     EnableWindow(s->hRefreshInterfaceBtn, enable);
 }
 
+void UpdateNetUnitHeaders(MainWindowState* s, const wchar_t* unit) {
+    wchar_t sendHdr[64], recvHdr[64];
+    swprintf_s(sendHdr, 64, L"网络发送(%s)", unit);
+    swprintf_s(recvHdr, 64, L"网络接收(%s)", unit);
+
+    // System ListView columns 7 & 8
+    LVCOLUMNW lvc = {};
+    lvc.mask = LVCF_TEXT;
+    lvc.pszText = sendHdr;
+    ListView_SetColumn(s->hSystemListView, SYS_COL_NET_SEND, &lvc);
+    lvc.pszText = recvHdr;
+    ListView_SetColumn(s->hSystemListView, SYS_COL_NET_RECV, &lvc);
+
+    // All process ListViews columns 6 & 7
+    for (auto& tab : s->processTabs) {
+        lvc.pszText = sendHdr;
+        ListView_SetColumn(tab.hListView, PROC_COL_NET_SEND, &lvc);
+        lvc.pszText = recvHdr;
+        ListView_SetColumn(tab.hListView, PROC_COL_NET_RECV, &lvc);
+    }
+}
+
 void UpdateStatus(MainWindowState* s, const wchar_t* status, COLORREF color) {
     s->statusColor = color;
     SetWindowTextW(s->hStatusLabel, status);
@@ -1472,9 +1499,9 @@ void SyncUIFromConfig(MainWindowState* s) {
     SetWindowTextW(s->hOutputDirEdit, cfg.outputDir);
 
     // Set net unit combo
-    if (wcscmp(cfg.netUnit, L"KB/s") == 0) ComboBox_SetCurSel(s->hNetUnitCombo, 0);
-    else if (wcscmp(cfg.netUnit, L"MB/s") == 0) ComboBox_SetCurSel(s->hNetUnitCombo, 1);
-    else if (wcscmp(cfg.netUnit, L"GB/s") == 0) ComboBox_SetCurSel(s->hNetUnitCombo, 2);
+    if (wcscmp(cfg.netUnit, L"Kbps") == 0) ComboBox_SetCurSel(s->hNetUnitCombo, 0);
+    else if (wcscmp(cfg.netUnit, L"Mbps") == 0) ComboBox_SetCurSel(s->hNetUnitCombo, 1);
+    else if (wcscmp(cfg.netUnit, L"Gbps") == 0) ComboBox_SetCurSel(s->hNetUnitCombo, 2);
 
     // Populate network interfaces
     auto ifaces = s->systemMonitor.GetNetworkInterfaces();
@@ -1507,7 +1534,7 @@ void SyncConfigFromUI(MainWindowState* s) {
 
     int unitIdx = ComboBox_GetCurSel(s->hNetUnitCombo);
     if (unitIdx >= 0) {
-        const wchar_t* units[] = { L"KB/s", L"MB/s", L"GB/s" };
+        const wchar_t* units[] = { L"Kbps", L"Mbps", L"Gbps" };
         wcscpy_s(cfg.netUnit, 16, units[unitIdx]);
     }
 
@@ -1610,7 +1637,7 @@ static const wchar_t* g_helpContents[] = {
     L"3. 网络流量监控\r\n"
     L"   • 支持按网卡筛选：下拉列表与 ncpa.cpl（网络连接）完全一致\r\n"
     L"   • 默认\"全部\"汇总所有物理网卡流量\r\n"
-    L"   • 支持 KB/s、MB/s、GB/s 三种单位切换\r\n"
+    L"   • 支持 Kbps、Mbps、Gbps 三种单位切换\r\n"
     L"   • 显示发送/接收双向速率\r\n"
     L"\r\n"
     L"4. 进程级资源监控\r\n"
@@ -1637,7 +1664,7 @@ static const wchar_t* g_helpContents[] = {
     L"  在\"监测项目设置\"区域勾选需要监测的项目（CPU / 内存 / 网络）。\r\n"
     L"\r\n"
     L"步骤 2 — 配置网络参数\r\n"
-    L"  选择合适的流量单位（KB/s、MB/s、GB/s），从下拉列表中选择\r\n"
+    L"  选择合适的流量单位（Kbps、Mbps、Gbps），从下拉列表中选择\r\n"
     L"  要监控的网卡（默认为\"全部\"）。可点击\"刷新\"按钮重新扫描。\r\n"
     L"\r\n"
     L"步骤 3 — 设置采样周期\r\n"
@@ -1708,9 +1735,10 @@ static const wchar_t* g_helpContents[] = {
     L"   • 内存使用「专用工作集」，与任务管理器显示一致\r\n"
     L"\r\n"
     L"3. 进程网络流量\r\n"
-    L"   • 基于 ETW 内核追踪实时捕获 TCP/IP 事件，按 PID 聚合\r\n"
-    L"   • 必须以管理员权限运行（启动时 UAC 提权）才能获取\r\n"
-    L"   • 未提权时进程网络始终显示 0.00，系统网络不受影响\r\n"
+    L"   • 通过 TCP 连接统计 API 读取每个连接字节计数器\r\n"
+    L"   • 两次采样间计算增量，换算为 Kbps / Mbps / Gbps\r\n"
+    L"   • 需管理员权限（启动时 UAC 提权）才能启用统计追踪\r\n"
+    L"   • 未提权时进程网络显示 0.00，系统网络不受影响\r\n"
     L"\r\n"
     L"4. Excel 导出\r\n"
     L"   • 仅在停止监测时自动导出\r\n"

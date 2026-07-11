@@ -141,23 +141,6 @@ else()
     )
 endif()
 
-# ============================================================================
-# Standalone network speed test
-# ============================================================================
-add_executable(test_netspeed
-    test_netspeed.cpp
-    src/NetSpeedMonitor.cpp
-)
-target_compile_definitions(test_netspeed PRIVATE
-    UNICODE _UNICODE
-    WIN32_LEAN_AND_MEAN NOMINMAX
-    _WIN32_WINNT=0x0601
-)
-target_include_directories(test_netspeed PRIVATE src)
-target_link_libraries(test_netspeed iphlpapi ws2_32)
-set_target_properties(test_netspeed PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/Release"
-)
 
 # ============================================================================
 # Output directories

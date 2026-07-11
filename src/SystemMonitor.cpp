@@ -131,7 +131,9 @@ SystemMonitorData SystemMonitor::Collect(double runSeconds) {
     time_t now = time(nullptr);
     struct tm tm_now;
     localtime_s(&tm_now, &now);
-    wcsftime(data.timestamp, MAX_TIMESTAMP_LEN, L"%Y-%m-%d %H:%M:%S", &tm_now);
+    swprintf_s(data.timestamp, MAX_TIMESTAMP_LEN, L"%d/%d/%d %02d:%02d:%02d",
+               tm_now.tm_year + 1900, tm_now.tm_mon + 1, tm_now.tm_mday,
+               tm_now.tm_hour, tm_now.tm_min, tm_now.tm_sec);
     data.cpuUsage = GetCpuUsage();
     GetMemoryInfo(data.memoryTotalGB, data.memoryAvailableGB,
                   data.memoryUsedGB, data.memoryUsage);

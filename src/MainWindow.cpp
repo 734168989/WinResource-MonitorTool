@@ -51,7 +51,7 @@ HWND CreateMainWindow(HINSTANCE hInstance) {
     return CreateWindowExW(
         WS_EX_CONTROLPARENT | WS_EX_WINDOWEDGE,
         L"MonitorToolMainWindow",
-        L"挂机电脑资源监测软件 V2.6 by 无人机",
+        L"挂机电脑资源监测软件 V2.8 by 无人机",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
         x, y, winW, winH,
         nullptr, nullptr, hInstance, nullptr
@@ -1209,7 +1209,7 @@ void UpdateSystemListView(MainWindowState* s) {
         }
         ListView_SetItemText(s->hSystemListView, lvIdx, SYS_COL_TIME, (LPWSTR)d.timestamp);
 
-        swprintf_s(buf, 64, L"%.2f", d.runSeconds);
+        swprintf_s(buf, 64, L"%.0f", d.runSeconds);
         ListView_SetItemText(s->hSystemListView, lvIdx, SYS_COL_RUN_SEC, buf);
 
         swprintf_s(buf, 64, L"%.2f", d.cpuUsage);
@@ -1277,7 +1277,7 @@ void UpdateProcessListView(MainWindowState* s, ProcessTabInfo& tab) {
 
         ListView_SetItemText(tab.hListView, lvIdx, PROC_COL_TIME, (LPWSTR)d.timestamp);
 
-        swprintf_s(buf, 64, L"%.2f", d.runSeconds);
+        swprintf_s(buf, 64, L"%.0f", d.runSeconds);
         ListView_SetItemText(tab.hListView, lvIdx, PROC_COL_RUN_SEC, buf);
 
         swprintf_s(buf, 64, L"%lu", d.pid);
@@ -1595,7 +1595,7 @@ static bool g_helpContentTab0Init = false;
 static const wchar_t* GetHelpTab0Content() {
     if (!g_helpContentTab0Init) {
         swprintf_s(g_helpContentTab0, 1024,
-            L"【挂机电脑资源监测软件  V2.6】\r\n"
+            L"【挂机电脑资源监测软件  V2.8】\r\n"
             L"\r\n"
             L"作者：无人机\r\n"
             L"编译时间：%s\r\n"
@@ -1628,7 +1628,7 @@ static const wchar_t* g_helpTitles[] = {
 
 static const wchar_t* g_helpContents[] = {
     // Tab 0: 软件简介
-    L"【挂机电脑资源监测软件  V2.6】\r\n"
+    L"【挂机电脑资源监测软件  V2.7】\r\n"
     L"\r\n"
     L"作者：无人机\r\n"
     L"\r\n"
@@ -1684,7 +1684,7 @@ static const wchar_t* g_helpContents[] = {
     L"   ■ 数据结构\r\n"
     L"     • Sheet1「系统资源」：时间/运行时间/CPU/内存各项/网络收发\r\n"
     L"     • Sheet2+ 各进程独立工作表（Sheet 名自动去掉 .exe 后缀）\r\n"
-    L"     • 表头加粗、单元格居中、列宽自适应、Microsoft YaHei 字体\r\n"
+    L"     • 表头加粗、单元格居中、列宽自适应、宋体 11号字体\r\n"
     L"   ■ 数据容量\r\n"
     L"     • 内存缓冲区上限 200 万行（~115 天 @5s 采样）\r\n"
     L"     • Excel 文件包含全部数据，可长期运行不断采集\r\n"

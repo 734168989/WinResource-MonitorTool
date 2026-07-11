@@ -381,7 +381,7 @@ elapsedSeconds 来自 QueryPerformanceCounter 差分
 | ZIP 容器 | 手写 ZIP writer（store 无压缩），LocalHeader + CentralDir + EOCD |
 | CRC32 | 标准 0xEDB88320 多项式查表法 |
 | 工作表 XML | OpenXML Spreadsheet 格式，`inlineStr` 内联字符串 |
-| 样式 | 内置 styles.xml，粗体表头，Microsoft YaHei 字体 |
+| 样式 | 内置 styles.xml，粗体表头，宋体 11号 字体 |
 | Sheet 命名 | 自动去掉 `.exe` 后缀，限长 31 字符，非法字符替换为 `_` |
 
 **XLSX 文件结构**：

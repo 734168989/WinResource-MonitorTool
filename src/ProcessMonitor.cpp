@@ -162,7 +162,9 @@ std::vector<ProcessMonitorData> ProcessMonitor::Collect(double runSeconds, NetSp
     struct tm tm_now;
     localtime_s(&tm_now, &now);
     wchar_t timestamp[MAX_TIMESTAMP_LEN];
-    wcsftime(timestamp, MAX_TIMESTAMP_LEN, L"%Y-%m-%d %H:%M:%S", &tm_now);
+    swprintf_s(timestamp, MAX_TIMESTAMP_LEN, L"%d/%d/%d %02d:%02d:%02d",
+               tm_now.tm_year + 1900, tm_now.tm_mon + 1, tm_now.tm_mday,
+               tm_now.tm_hour, tm_now.tm_min, tm_now.tm_sec);
 
     // Find all currently running PIDs
     auto currentPids = FindAllProcessPids();

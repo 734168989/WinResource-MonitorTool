@@ -6,6 +6,7 @@
 //
 #include "ExcelExporter.h"
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <cmath>
 #include <string>
@@ -213,24 +214,65 @@ static std::string XmlEscape(const std::wstring& ws) {
 // ============================================================================
 // XLSX sheet XML builder
 // ============================================================================
+
+// Compute Excel 1900 date system serial number from date/time components
+static double MakeExcelDate(int year, int month, int day, int hour, int min, int sec) {
+    // Julian Day Number algorithm
+    int y = year, m = month;
+    if (m <= 2) { y--; m += 12; }
+    int a = y / 100;
+    int b = 2 - a + a / 4;
+    long jdn = (long)(365.25 * (y + 4716)) + (long)(30.6001 * (m + 1)) + day + b - 1524;
+    // JDN(1970-01-01) = 2440588, Excel serial for 1970-01-01 = 25569
+    // → offset = 2440588 - 25569 = 2415019
+    long excelDays = jdn - 2415019;
+    double timeFrac = (hour * 3600.0 + min * 60.0 + sec) / 86400.0;
+    return (double)excelDays + timeFrac;
+}
+
+// Parse timestamp "yyyy/M/d HH:mm:ss" → Excel date serial
+static double ParseTimestampToExcel(const std::wstring& ts) {
+    int year = 0, month = 0, day = 0, hour = 0, min = 0, sec = 0;
+    if (swscanf_s(ts.c_str(), L"%d/%d/%d %d:%d:%d", &year, &month, &day, &hour, &min, &sec) == 6) {
+        return MakeExcelDate(year, month, day, hour, min, sec);
+    }
+    return 0.0;
+}
+
+// Column type for typed cell output
+enum class ColType { String = 0, Date = 1, Number = 2, Integer = 3 };
+
 static std::string BuildSheetXml(const std::vector<std::wstring>& headers,
                                   const std::vector<std::vector<std::wstring>>& rows) {
     // Column letters A-Z (supports up to 26 columns)
     const char COL[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    // Determine column types from header names
+    std::vector<ColType> colTypes;
+    colTypes.reserve(headers.size());
+    for (size_t c = 0; c < headers.size(); c++) {
+        if (headers[c].find(L"运行时间") != std::wstring::npos ||
+            headers[c].find(L"进程ID") != std::wstring::npos) {
+            colTypes.push_back(ColType::Integer);
+        } else if (headers[c].find(L"时间戳") != std::wstring::npos ||
+                   headers[c].find(L"时间") != std::wstring::npos) {
+            colTypes.push_back(ColType::Date);
+        } else {
+            colTypes.push_back(ColType::Number);
+        }
+    }
 
     std::string xml;
     xml += "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n";
     xml += "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\r\n";
     xml += "<cols>\r\n";
     for (size_t c = 0; c < headers.size(); c++) {
-        // Calculate column width based on header text length
-        // CJK characters are ~2 Excel units wide, ASCII ~1 unit
         double width = 0;
         for (size_t k = 0; k < headers[c].length(); k++) {
             width += (headers[c][k] > 0x7F) ? 2.2 : 1.1;
         }
-        width += 3.0;  // padding
-        if (width < 8.0) width = 8.0;  // minimum width
+        width += 3.0;
+        if (width < 8.0) width = 8.0;
 
         char buf[128];
         snprintf(buf, sizeof(buf),
@@ -241,7 +283,7 @@ static std::string BuildSheetXml(const std::vector<std::wstring>& headers,
     xml += "</cols>\r\n";
     xml += "<sheetData>\r\n";
 
-    // Header row
+    // Header row (s="1" = bold centered)
     xml += "<row r=\"1\">\r\n";
     for (size_t c = 0; c < headers.size(); c++) {
         char ref[16];
@@ -254,7 +296,7 @@ static std::string BuildSheetXml(const std::vector<std::wstring>& headers,
     }
     xml += "</row>\r\n";
 
-    // Data rows
+    // Data rows — typed output
     for (size_t r = 0; r < rows.size(); r++) {
         char rowTag[32];
         snprintf(rowTag, sizeof(rowTag), "<row r=\"%u\">\r\n", (unsigned)(r + 2));
@@ -262,11 +304,47 @@ static std::string BuildSheetXml(const std::vector<std::wstring>& headers,
         for (size_t c = 0; c < headers.size() && c < rows[r].size(); c++) {
             char ref[16];
             snprintf(ref, sizeof(ref), "%c%u", COL[c], (unsigned)(r + 2));
-            xml += "<c r=\"";
-            xml += ref;
-            xml += "\" t=\"inlineStr\" s=\"0\"><is><t>";
-            xml += XmlEscape(rows[r][c]);
-            xml += "</t></is></c>\r\n";
+
+            ColType ct = (c < colTypes.size()) ? colTypes[c] : ColType::String;
+
+            if (ct == ColType::Date) {
+                // Date cell: Excel date serial with date format (s="2")
+                double serial = ParseTimestampToExcel(rows[r][c]);
+                char valBuf[64];
+                snprintf(valBuf, sizeof(valBuf), "%.10f", serial);
+                xml += "<c r=\"";
+                xml += ref;
+                xml += "\" s=\"2\"><v>";
+                xml += valBuf;
+                xml += "</v></c>\r\n";
+            } else if (ct == ColType::Integer) {
+                // Integer cell: integer value with 0 format (s="4")
+                long val = (long)_wtof(rows[r][c].c_str());
+                char valBuf[64];
+                snprintf(valBuf, sizeof(valBuf), "%ld", val);
+                xml += "<c r=\"";
+                xml += ref;
+                xml += "\" s=\"4\"><v>";
+                xml += valBuf;
+                xml += "</v></c>\r\n";
+            } else if (ct == ColType::Number) {
+                // Number cell: numeric value with 0.00 format (s="3")
+                double val = _wtof(rows[r][c].c_str());
+                char valBuf[64];
+                snprintf(valBuf, sizeof(valBuf), "%.10f", val);
+                xml += "<c r=\"";
+                xml += ref;
+                xml += "\" s=\"3\"><v>";
+                xml += valBuf;
+                xml += "</v></c>\r\n";
+            } else {
+                // String cell: inline string (s="0")
+                xml += "<c r=\"";
+                xml += ref;
+                xml += "\" t=\"inlineStr\" s=\"0\"><is><t>";
+                xml += XmlEscape(rows[r][c]);
+                xml += "</t></is></c>\r\n";
+            }
         }
         xml += "</row>\r\n";
     }
@@ -343,9 +421,14 @@ static std::string BuildStylesXml() {
     return
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n"
         "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\r\n"
+        "<numFmts count=\"3\">\r\n"
+        "<numFmt numFmtId=\"164\" formatCode=\"yyyy/m/d\\ h:mm:ss\"/>\r\n"
+        "<numFmt numFmtId=\"165\" formatCode=\"0.00\"/>\r\n"
+        "<numFmt numFmtId=\"166\" formatCode=\"0\"/>\r\n"
+        "</numFmts>\r\n"
         "<fonts count=\"2\">\r\n"
-        "<font><sz val=\"11\"/><name val=\"Microsoft YaHei\"/></font>\r\n"
-        "<font><b/><sz val=\"11\"/><name val=\"Microsoft YaHei\"/></font>\r\n"
+        "<font><sz val=\"11\"/><name val=\"宋体\"/></font>\r\n"
+        "<font><b/><sz val=\"11\"/><name val=\"宋体\"/></font>\r\n"
         "</fonts>\r\n"
         "<fills count=\"2\">\r\n"
         "<fill><patternFill patternType=\"none\"/></fill>\r\n"
@@ -357,10 +440,16 @@ static std::string BuildStylesXml() {
         "<cellStyleXfs count=\"1\">\r\n"
         "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/>\r\n"
         "</cellStyleXfs>\r\n"
-        "<cellXfs count=\"2\">\r\n"
+        "<cellXfs count=\"5\">\r\n"
         "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyAlignment=\"1\">"
         "<alignment horizontal=\"center\" vertical=\"center\"/></xf>\r\n"
         "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">"
+        "<alignment horizontal=\"center\" vertical=\"center\"/></xf>\r\n"
+        "<xf numFmtId=\"164\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyAlignment=\"1\">"
+        "<alignment horizontal=\"center\" vertical=\"center\"/></xf>\r\n"
+        "<xf numFmtId=\"165\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyAlignment=\"1\">"
+        "<alignment horizontal=\"center\" vertical=\"center\"/></xf>\r\n"
+        "<xf numFmtId=\"166\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyAlignment=\"1\">"
         "<alignment horizontal=\"center\" vertical=\"center\"/></xf>\r\n"
         "</cellXfs>\r\n"
         "</styleSheet>";
@@ -448,7 +537,7 @@ bool ExcelExporter::Export(const wchar_t* outputDir, double startTimestamp,
             std::vector<std::wstring> row;
             row.push_back(d.timestamp);
             wchar_t buf[64];
-            swprintf_s(buf, 64, L"%.2f", d.runSeconds);    row.push_back(buf);
+            swprintf_s(buf, 64, L"%.0f", d.runSeconds);    row.push_back(buf);
             swprintf_s(buf, 64, L"%.2f", d.cpuUsage);       row.push_back(buf);
             swprintf_s(buf, 64, L"%.2f", d.memoryTotalGB);  row.push_back(buf);
             swprintf_s(buf, 64, L"%.2f", d.memoryAvailableGB); row.push_back(buf);
@@ -645,7 +734,7 @@ static void BuildZipEntries(
             std::vector<std::wstring> row;
             row.push_back(d.timestamp);
             wchar_t buf[64];
-            swprintf_s(buf, 64, L"%.2f", d.runSeconds);    row.push_back(buf);
+            swprintf_s(buf, 64, L"%.0f", d.runSeconds);    row.push_back(buf);
             swprintf_s(buf, 64, L"%.2f", d.cpuUsage);       row.push_back(buf);
             swprintf_s(buf, 64, L"%.2f", d.memoryTotalGB);  row.push_back(buf);
             swprintf_s(buf, 64, L"%.2f", d.memoryAvailableGB); row.push_back(buf);

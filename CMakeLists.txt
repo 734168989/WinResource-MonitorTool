@@ -1,5 +1,5 @@
 ﻿cmake_minimum_required(VERSION 3.16)
-project(挂机电脑资源检测工具 VERSION 2.6 LANGUAGES CXX)
+project(挂机电脑资源检测工具 VERSION 2.8 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

@@ -49,14 +49,24 @@ HWND CreateMainWindow(HINSTANCE hInstance) {
     int x = (screenW - winW) / 2;
     int y = (screenH - winH) / 2;
 
-    return CreateWindowExW(
-        WS_EX_CONTROLPARENT | WS_EX_WINDOWEDGE,
+    HWND hWnd = CreateWindowExW(
+        WS_EX_APPWINDOW | WS_EX_WINDOWEDGE,
         L"MonitorToolMainWindow",
         L"挂机电脑资源监测软件 V3.2 by 无人机",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
         x, y, winW, winH,
         nullptr, nullptr, hInstance, nullptr
     );
+
+    // Force taskbar to show the correct icon immediately
+    if (hWnd) {
+        HICON hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_MAIN_ICON));
+        if (hIcon) {
+            SendMessageW(hWnd, WM_SETICON, ICON_BIG,   (LPARAM)hIcon);
+            SendMessageW(hWnd, WM_SETICON, ICON_SMALL, (LPARAM)hIcon);
+        }
+    }
+    return hWnd;
 }
 
 // ============================================================================
@@ -150,7 +160,6 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
     case WM_SIZE: {
         if (s) {
             LayoutControls(s);
-            // 确保窗口大小变化时所有区域被重绘
             InvalidateRect(hWnd, nullptr, TRUE);
         }
         return 0;
@@ -389,9 +398,10 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                 }
             }
             break;
-        }
+
+        }      // end switch(id)
         return 0;
-    }
+    }          // end case WM_COMMAND
 
     case WM_NCRBUTTONDOWN: {
         // Right-click on title bar → suppress default system menu, show our own
@@ -526,8 +536,8 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 
     case WM_CLOSE: {
         if (s && s->isMonitoring) {
-            if (MessageBoxW(hWnd, L"监测正在进行中，确定要退出吗？", L"确认",
-                           MB_YESNO | MB_ICONQUESTION) == IDNO)
+            if (MessageBoxW(hWnd, L"监测正在进行中，确定要退出吗？",
+                           L"确认", MB_YESNO | MB_ICONQUESTION) == IDNO)
                 return 0;
             StopMonitoring(s);
         }

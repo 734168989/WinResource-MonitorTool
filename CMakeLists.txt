@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.16)
 project(挂机电脑资源监测软件 VERSION 3.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -47,7 +47,7 @@ set(RESOURCES
 )
 
 # ============================================================================
-# Executable
+# Target 1: MonitorTool — 完整时间戳 (开发/调试用)
 # ============================================================================
 add_executable(MonitorTool WIN32
     ${SOURCES}
@@ -56,30 +56,66 @@ add_executable(MonitorTool WIN32
 )
 
 # ============================================================================
-# Target-specific settings
+# Target 2: MonitorTool_Release — 年月时间戳 (发布用)
 # ============================================================================
-target_compile_definitions(MonitorTool PRIVATE
-    UNICODE _UNICODE
-    WIN32_LEAN_AND_MEAN NOMINMAX
-    _WIN32_WINNT=0x0601
+add_executable(MonitorTool_Release WIN32
+    ${SOURCES}
+    ${HEADERS}
+    ${RESOURCES}
+)
+target_compile_definitions(MonitorTool_Release PRIVATE TIMESTAMP_SHORT)
+
+# ============================================================================
+# Common target settings
+# ============================================================================
+foreach(TGT MonitorTool MonitorTool_Release)
+    target_compile_definitions(${TGT} PRIVATE
+        UNICODE _UNICODE
+        WIN32_LEAN_AND_MEAN NOMINMAX
+        _WIN32_WINNT=0x0601
+    )
+    target_include_directories(${TGT} PRIVATE include include/core include/ui include/utils src res)
+    target_link_libraries(${TGT} ${WIN32_LIBS})
+    set_target_properties(${TGT} PROPERTIES WIN32_EXECUTABLE TRUE)
+endforeach()
+
+# ============================================================================
+# Build timestamp — placeholder written at configure time.
+# The actual timestamp is binary-patched into the exe by POST_BUILD
+# (powershell cmake/patch_timestamp.ps1) → accurate to the second.
+# ============================================================================
+file(WRITE "${CMAKE_SOURCE_DIR}/include/utils/build_timestamp.h"
+    "#pragma once\n#define BUILD_TIMESTAMP_FULL  L\"0000-00-00 00:00:00\"\n#define BUILD_TIMESTAMP_SHORT L\"0000-00\"\n"
 )
 
-target_include_directories(MonitorTool PRIVATE include include/core include/ui include/utils src res)
-
-target_link_libraries(MonitorTool ${WIN32_LIBS})
-
-set_target_properties(MonitorTool PROPERTIES
-    WIN32_EXECUTABLE TRUE
-)
-
-# Disable default MSVC manifest, use custom admin-required manifest via mt.exe
 if(MSVC)
     target_link_options(MonitorTool PRIVATE "/MANIFEST:NO")
+    target_link_options(MonitorTool_Release PRIVATE "/MANIFEST:NO")
+
+    # PRE_BUILD: delete old exe to avoid LNK1104
+    add_custom_command(TARGET MonitorTool PRE_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E remove -f "$<TARGET_FILE:MonitorTool>"
+        COMMENT "Remove old MonitorTool.exe"
+    )
+    add_custom_command(TARGET MonitorTool_Release PRE_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E remove -f "$<TARGET_FILE:MonitorTool_Release>"
+        COMMENT "Remove old MonitorTool_Release.exe"
+    )
+
+    # POST_BUILD: embed manifest, then patch timestamp placeholder → real time
     add_custom_command(TARGET MonitorTool POST_BUILD
         COMMAND "mt.exe" -nologo
                 -manifest "${CMAKE_SOURCE_DIR}/res/MonitorTool.manifest"
                 "-outputresource:$<TARGET_FILE:MonitorTool>;#1"
-        COMMENT "Embedding custom manifest (requireAdministrator)"
+        COMMAND powershell -ExecutionPolicy Bypass -File "${CMAKE_SOURCE_DIR}/cmake/patch_timestamp.ps1" -ExeFile "$<TARGET_FILE:MonitorTool>"
+        COMMENT "Embed manifest + patch timestamp → MonitorTool"
+    )
+    add_custom_command(TARGET MonitorTool_Release POST_BUILD
+        COMMAND "mt.exe" -nologo
+                -manifest "${CMAKE_SOURCE_DIR}/res/MonitorTool.manifest"
+                "-outputresource:$<TARGET_FILE:MonitorTool_Release>;#1"
+        COMMAND powershell -ExecutionPolicy Bypass -File "${CMAKE_SOURCE_DIR}/cmake/patch_timestamp.ps1" -ExeFile "$<TARGET_FILE:MonitorTool_Release>"
+        COMMENT "Embed manifest + patch timestamp → MonitorTool_Release"
     )
 endif()
 
@@ -87,72 +123,51 @@ endif()
 # Compiler-specific options
 # ============================================================================
 if(MSVC)
-    # ---- MSVC (Visual Studio) ----
-    # .rc file is UTF-8; resource compiler needs codepage hint + src/include paths
     set(CMAKE_RC_FLAGS "/c65001 /I src /I res" CACHE STRING "UTF-8 resource compiler flag" FORCE)
 
-    target_compile_options(MonitorTool PRIVATE
-        /W4              # Warning level 4
-        /utf-8           # UTF-8 source encoding
-        /MP              # Multi-processor compilation
-        /permissive-     # Standards conformance
-        /Zc:__cplusplus  # Correct __cplusplus macro
-    )
-
-    # Debug: full debug info, no optimization
-    target_compile_options(MonitorTool PRIVATE
-        $<$<CONFIG:Debug>:/Od /ZI /RTC1>
-    )
-
-    # Release: optimize for size and speed
-    target_compile_options(MonitorTool PRIVATE
-        $<$<CONFIG:Release>:/O2 /Gy /GL>
-    )
-    target_link_options(MonitorTool PRIVATE
-        $<$<CONFIG:Release>:/OPT:REF /OPT:ICF /LTCG>
-    )
-
-    # RelWithDebInfo: optimized + debug symbols (recommended for daily use)
-    target_compile_options(MonitorTool PRIVATE
-        $<$<CONFIG:RelWithDebInfo>:/O2 /Zi /Gy>
-    )
-    target_link_options(MonitorTool PRIVATE
-        $<$<CONFIG:RelWithDebInfo>:/OPT:REF /OPT:ICF /DEBUG:FULL>
-    )
-
+    foreach(TGT MonitorTool MonitorTool_Release)
+        target_compile_options(${TGT} PRIVATE
+            /W4 /utf-8 /MP /permissive- /Zc:__cplusplus
+        )
+        target_compile_options(${TGT} PRIVATE
+            $<$<CONFIG:Debug>:/Od /ZI /RTC1>
+            $<$<CONFIG:Release>:/O2 /Gy /GL>
+            $<$<CONFIG:RelWithDebInfo>:/O2 /Zi /Gy>
+        )
+        target_link_options(${TGT} PRIVATE
+            $<$<CONFIG:Release>:/OPT:REF /OPT:ICF /LTCG>
+            $<$<CONFIG:RelWithDebInfo>:/OPT:REF /OPT:ICF /DEBUG:FULL>
+        )
+    endforeach()
 else()
-    # ---- GCC / MinGW ----
-    target_compile_options(MonitorTool PRIVATE
-        -Wall -Wextra
-    )
-
-    target_compile_options(MonitorTool PRIVATE
-        $<$<CONFIG:Debug>:-Og -g3>
-    )
-
-    target_compile_options(MonitorTool PRIVATE
-        $<$<CONFIG:Release>:-O2 -s -ffunction-sections -fdata-sections>
-    )
-    target_link_options(MonitorTool PRIVATE
-        $<$<CONFIG:Release>:-Wl,--gc-sections -s>
-    )
-
-    target_compile_options(MonitorTool PRIVATE
-        $<$<CONFIG:RelWithDebInfo>:-O2 -g -ffunction-sections -fdata-sections>
-    )
-    target_link_options(MonitorTool PRIVATE
-        $<$<CONFIG:RelWithDebInfo>:-Wl,--gc-sections>
-    )
+    foreach(TGT MonitorTool MonitorTool_Release)
+        target_compile_options(${TGT} PRIVATE -Wall -Wextra)
+        target_compile_options(${TGT} PRIVATE
+            $<$<CONFIG:Debug>:-Og -g3>
+            $<$<CONFIG:Release>:-O2 -s -ffunction-sections -fdata-sections>
+            $<$<CONFIG:RelWithDebInfo>:-O2 -g -ffunction-sections -fdata-sections>
+        )
+        target_link_options(${TGT} PRIVATE
+            $<$<CONFIG:Release>:-Wl,--gc-sections -s>
+            $<$<CONFIG:RelWithDebInfo>:-Wl,--gc-sections>
+        )
+    endforeach()
 endif()
-
 
 # ============================================================================
 # Output directories
 # ============================================================================
-set_target_properties(MonitorTool PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY_DEBUG              "${CMAKE_SOURCE_DIR}/out"
-    RUNTIME_OUTPUT_DIRECTORY_RELEASE            "${CMAKE_SOURCE_DIR}/out"
-    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO     "${CMAKE_SOURCE_DIR}/out"
+foreach(TGT MonitorTool MonitorTool_Release)
+    set_target_properties(${TGT} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_DEBUG              "${CMAKE_SOURCE_DIR}/out"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE            "${CMAKE_SOURCE_DIR}/out"
+        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO     "${CMAKE_SOURCE_DIR}/out"
+    )
+endforeach()
+
+# Release 目标输出为 MonitorTool_Release.exe
+set_target_properties(MonitorTool_Release PROPERTIES
+    OUTPUT_NAME "MonitorTool_Release"
 )
 
 # ============================================================================
@@ -164,6 +179,6 @@ source_group("Source Files\\utils" FILES src/utils/DataBuffer.cpp src/utils/Conf
 source_group("Source Files"        FILES src/main.cpp)
 source_group("Header Files\\core"  FILES include/core/SystemMonitor.h include/core/ProcessMonitor.h include/core/NetSpeedMonitor.h)
 source_group("Header Files\\ui"    FILES include/ui/MainWindow.h include/ui/HelpDialog.h)
-source_group("Header Files\\utils" FILES include/utils/DataModels.h include/utils/DataBuffer.h include/utils/ConfigManager.h include/utils/ExcelExporter.h include/utils/HtmlChartExporter.h)
+source_group("Header Files\\utils" FILES include/utils/DataModels.h include/utils/DataBuffer.h include/utils/ConfigManager.h include utils/ExcelExporter.h include/utils/HtmlChartExporter.h)
 source_group("Header Files"        FILES )
 source_group("Resource Files"      FILES ${RESOURCES} res/resource.h)

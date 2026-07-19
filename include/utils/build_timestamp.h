@@ -1,0 +1,3 @@
+#pragma once
+#define BUILD_TIMESTAMP_FULL  L"0000-00-00 00:00:00"
+#define BUILD_TIMESTAMP_SHORT L"0000-00"

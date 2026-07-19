@@ -1,5 +1,6 @@
 ﻿// HelpDialog.cpp - Help/About dialog
 #include "HelpDialog.h"
+#include "build_timestamp.h"
 #include <commctrl.h>
 #include <cstdio>
 #include <ctime>
@@ -7,14 +8,11 @@
 #pragma comment(lib, "comctl32.lib")
 
 static const wchar_t* BuildTimestamp() {
-    static wchar_t buf[64]; static bool done = false;
-    if (!done) {
-        char ds[64]; snprintf(ds, sizeof(ds), "%s %s", __DATE__, __TIME__);
-        int n = MultiByteToWideChar(CP_UTF8, 0, ds, -1, buf, 64);
-        if (n > 0 && n <= 64) buf[n-1] = L'\0';
-        done = true;
-    }
-    return buf;
+#ifdef TIMESTAMP_SHORT
+    return BUILD_TIMESTAMP_SHORT;
+#else
+    return BUILD_TIMESTAMP_FULL;
+#endif
 }
 
 static wchar_t g_helpTab0[1024]; static bool g_helpTab0Init = false;

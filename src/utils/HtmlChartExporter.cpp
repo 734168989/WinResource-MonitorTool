@@ -743,7 +743,7 @@ std::wstring HtmlChartExporter::Export(
     wchar_t timestamp[32];
     wcsftime(timestamp, 32, L"%Y%m%d%H%M%S", &tm_start);
     wchar_t filePath[MAX_PATH];
-    swprintf_s(filePath, MAX_PATH, L"%s\\挂机电脑资源监测软件V3.2_%s.html", outputDir, timestamp);
+    swprintf_s(filePath, MAX_PATH, L"%s\\挂机电脑资源监测软件V3.3_%s.html", outputDir, timestamp);
 
     HANDLE hFile = CreateFileW(filePath, GENERIC_WRITE, 0, nullptr,
                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);

@@ -52,7 +52,7 @@ HWND CreateMainWindow(HINSTANCE hInstance) {
     HWND hWnd = CreateWindowExW(
         WS_EX_APPWINDOW | WS_EX_WINDOWEDGE,
         L"MonitorToolMainWindow",
-        L"挂机电脑资源监测软件 V3.2",
+        L"挂机电脑资源监测软件 V3.3",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
         x, y, winW, winH,
         nullptr, nullptr, hInstance, nullptr
@@ -1227,8 +1227,10 @@ void StartMonitoring(MainWindowState* s) {
     // Clear previous data
     s->dataBuffer.Clear();
     ListView_DeleteAllItems(s->hSystemListView);
-    for (auto& tab : s->processTabs)
+    for (auto& tab : s->processTabs) {
         ListView_DeleteAllItems(tab.hListView);
+        tab.lastDataIdx = -1;
+    }
 
     // Reset display offsets
     s->m_sysDisplayOffset = 0;
@@ -1306,6 +1308,8 @@ void StopMonitoring(MainWindowState* s) {
     // Reset display offsets
     s->m_sysDisplayOffset = 0;
     s->m_procDisplayOffsets.clear();
+    for (auto& tab : s->processTabs)
+        tab.lastDataIdx = -1;
 
     // Show saving indicator
     UpdateStatus(s, L"状态: 正在保存中…", RGB(255, 165, 0));  // orange
@@ -1695,10 +1699,12 @@ void ShowContextMenu(HWND hWnd, HWND hListView, int x, int y, MainWindowState* s
         ListView_DeleteAllItems(hListView);
         if (hListView == s->hSystemListView) {
             s->dataBuffer.Clear();
+            s->m_sysDisplayOffset = 0;
         } else {
             for (auto& tab : s->processTabs) {
                 if (tab.hListView == hListView) {
                     s->dataBuffer.ClearProcess(tab.processName);
+                    tab.lastDataIdx = -1;
                     break;
                 }
             }

@@ -92,16 +92,6 @@ if(MSVC)
     target_link_options(MonitorTool PRIVATE "/MANIFEST:NO")
     target_link_options(MonitorTool_Release PRIVATE "/MANIFEST:NO")
 
-    # PRE_BUILD: delete old exe to avoid LNK1104
-    add_custom_command(TARGET MonitorTool PRE_BUILD
-        COMMAND "${CMAKE_COMMAND}" -E remove -f "$<TARGET_FILE:MonitorTool>"
-        COMMENT "Remove old MonitorTool.exe"
-    )
-    add_custom_command(TARGET MonitorTool_Release PRE_BUILD
-        COMMAND "${CMAKE_COMMAND}" -E remove -f "$<TARGET_FILE:MonitorTool_Release>"
-        COMMENT "Remove old MonitorTool_Release.exe"
-    )
-
     # POST_BUILD: embed manifest, then patch timestamp placeholder → real time
     add_custom_command(TARGET MonitorTool POST_BUILD
         COMMAND "mt.exe" -nologo

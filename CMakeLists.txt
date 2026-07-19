@@ -1,5 +1,5 @@
 ﻿cmake_minimum_required(VERSION 3.16)
-project(挂机电脑资源检测工具 VERSION 2.8 LANGUAGES CXX)
+project(挂机电脑资源监测软件 VERSION 3.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,25 +17,29 @@ set(WIN32_LIBS
 # ============================================================================
 set(SOURCES
     src/main.cpp
-    src/MainWindow.cpp
-    src/DataBuffer.cpp
-    src/ConfigManager.cpp
-    src/SystemMonitor.cpp
-    src/ProcessMonitor.cpp
-    src/NetSpeedMonitor.cpp
-    src/ExcelExporter.cpp
+    src/ui/MainWindow.cpp
+    src/ui/HelpDialog.cpp
+    src/utils/DataBuffer.cpp
+    src/utils/ConfigManager.cpp
+    src/utils/ExcelExporter.cpp
+    src/utils/HtmlChartExporter.cpp
+    src/core/SystemMonitor.cpp
+    src/core/ProcessMonitor.cpp
+    src/core/NetSpeedMonitor.cpp
 )
 
 set(HEADERS
-    src/MainWindow.h
-    src/DataModels.h
-    src/DataBuffer.h
-    src/ConfigManager.h
-    src/SystemMonitor.h
-    src/ProcessMonitor.h
-    src/NetSpeedMonitor.h
-    src/ExcelExporter.h
-    src/resource.h
+    include/ui/MainWindow.h
+    include/ui/HelpDialog.h
+    include/utils/DataModels.h
+    include/utils/DataBuffer.h
+    include/utils/ConfigManager.h
+    include/utils/ExcelExporter.h
+    include/utils/HtmlChartExporter.h
+    include/core/SystemMonitor.h
+    include/core/ProcessMonitor.h
+    include/core/NetSpeedMonitor.h
+    res/resource.h
 )
 
 set(RESOURCES
@@ -60,7 +64,7 @@ target_compile_definitions(MonitorTool PRIVATE
     _WIN32_WINNT=0x0601
 )
 
-target_include_directories(MonitorTool PRIVATE src)
+target_include_directories(MonitorTool PRIVATE include include/core include/ui include/utils src res)
 
 target_link_libraries(MonitorTool ${WIN32_LIBS})
 
@@ -146,14 +150,20 @@ endif()
 # Output directories
 # ============================================================================
 set_target_properties(MonitorTool PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY_DEBUG              "${CMAKE_BINARY_DIR}/bin/Debug"
-    RUNTIME_OUTPUT_DIRECTORY_RELEASE            "${CMAKE_BINARY_DIR}/bin/Release"
-    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO     "${CMAKE_BINARY_DIR}/bin/RelWithDebInfo"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG              "${CMAKE_SOURCE_DIR}/out"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE            "${CMAKE_SOURCE_DIR}/out"
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO     "${CMAKE_SOURCE_DIR}/out"
 )
 
 # ============================================================================
 # Source group for Visual Studio filters
 # ============================================================================
-source_group("Source Files"    FILES ${SOURCES})
-source_group("Header Files"    FILES ${HEADERS})
-source_group("Resource Files"  FILES ${RESOURCES})
+source_group("Source Files\\core"  FILES src/core/SystemMonitor.cpp src/core/ProcessMonitor.cpp src/core/NetSpeedMonitor.cpp)
+source_group("Source Files\\ui"    FILES src/ui/MainWindow.cpp src/ui/HelpDialog.cpp)
+source_group("Source Files\\utils" FILES src/utils/DataBuffer.cpp src/utils/ConfigManager.cpp src/utils/ExcelExporter.cpp src/utils/HtmlChartExporter.cpp)
+source_group("Source Files"        FILES src/main.cpp)
+source_group("Header Files\\core"  FILES include/core/SystemMonitor.h include/core/ProcessMonitor.h include/core/NetSpeedMonitor.h)
+source_group("Header Files\\ui"    FILES include/ui/MainWindow.h include/ui/HelpDialog.h)
+source_group("Header Files\\utils" FILES include/utils/DataModels.h include/utils/DataBuffer.h include/utils/ConfigManager.h include/utils/ExcelExporter.h include/utils/HtmlChartExporter.h)
+source_group("Header Files"        FILES )
+source_group("Resource Files"      FILES ${RESOURCES} res/resource.h)

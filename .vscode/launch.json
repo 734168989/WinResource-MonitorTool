@@ -2,28 +2,40 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug (MonitorTool)",
+            "name": "MonitorTool (Debug)",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/out/build/x64-Debug/bin/Debug/MonitorTool.exe",
+            "program": "${workspaceFolder}/out/MonitorTool.exe",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}",
+            "cwd": "${workspaceFolder}/out",
             "environment": [],
             "console": "newExternalWindow",
             "preLaunchTask": "CMake: Build (Debug)"
         },
         {
-            "name": "Debug (RelWithDebInfo)",
+            "name": "MonitorTool (RelWithDebInfo)",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/out/build/x64-RelWithDebInfo/bin/RelWithDebInfo/MonitorTool.exe",
+            "program": "${workspaceFolder}/out/MonitorTool.exe",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}",
+            "cwd": "${workspaceFolder}/out",
             "environment": [],
             "console": "newExternalWindow",
             "preLaunchTask": "CMake: Build (RelWithDebInfo)"
+        },
+        {
+            "name": "MonitorTool (Release)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/out/MonitorTool.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/out",
+            "environment": [],
+            "console": "newExternalWindow",
+            "preLaunchTask": "CMake: Build (Release)"
         }
     ]
 }

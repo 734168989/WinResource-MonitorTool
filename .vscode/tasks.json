@@ -6,125 +6,87 @@
             "type": "shell",
             "command": "cmake",
             "args": [
-                "-B", "${workspaceFolder}/out/build/x64-Debug",
+                "-B", "${workspaceFolder}/build/vs-x64-Debug",
                 "-S", "${workspaceFolder}",
                 "-G", "Ninja",
                 "-DCMAKE_BUILD_TYPE=Debug",
                 "-DCMAKE_C_COMPILER=cl.exe",
                 "-DCMAKE_CXX_COMPILER=cl.exe"
             ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
+            "options": { "cwd": "${workspaceFolder}" },
             "group": "build",
-            "problemMatcher": [],
-            "detail": "CMake configure (Debug)"
-        },
-        {
-            "label": "CMake: Configure (RelWithDebInfo)",
-            "type": "shell",
-            "command": "cmake",
-            "args": [
-                "-B", "${workspaceFolder}/out/build/x64-RelWithDebInfo",
-                "-S", "${workspaceFolder}",
-                "-G", "Ninja",
-                "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
-                "-DCMAKE_C_COMPILER=cl.exe",
-                "-DCMAKE_CXX_COMPILER=cl.exe"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "group": "build",
-            "problemMatcher": [],
-            "detail": "CMake configure (RelWithDebInfo)"
-        },
-        {
-            "label": "CMake: Configure (Release)",
-            "type": "shell",
-            "command": "cmake",
-            "args": [
-                "-B", "${workspaceFolder}/out/build/x64-Release",
-                "-S", "${workspaceFolder}",
-                "-G", "Ninja",
-                "-DCMAKE_BUILD_TYPE=Release",
-                "-DCMAKE_C_COMPILER=cl.exe",
-                "-DCMAKE_CXX_COMPILER=cl.exe"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "group": "build",
-            "problemMatcher": [],
-            "detail": "CMake configure (Release)"
+            "problemMatcher": []
         },
         {
             "label": "CMake: Build (Debug)",
             "type": "shell",
             "command": "cmake",
             "args": [
-                "--build", "${workspaceFolder}/out/build/x64-Debug",
+                "--build", "${workspaceFolder}/build/vs-x64-Debug",
                 "--config", "Debug"
             ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
-            "problemMatcher": [
-                "$msCompile"
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": "build",
+            "problemMatcher": ["$msCompile"]
+        },
+        {
+            "label": "CMake: Configure (RelWithDebInfo)",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "-B", "${workspaceFolder}/build/vs-x64-RelWithDebInfo",
+                "-S", "${workspaceFolder}",
+                "-G", "Ninja",
+                "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+                "-DCMAKE_C_COMPILER=cl.exe",
+                "-DCMAKE_CXX_COMPILER=cl.exe"
             ],
-            "detail": "CMake build (Debug)"
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": "build",
+            "problemMatcher": []
         },
         {
             "label": "CMake: Build (RelWithDebInfo)",
             "type": "shell",
             "command": "cmake",
             "args": [
-                "--build", "${workspaceFolder}/out/build/x64-RelWithDebInfo",
+                "--build", "${workspaceFolder}/build/vs-x64-RelWithDebInfo",
                 "--config", "RelWithDebInfo"
             ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
+            "options": { "cwd": "${workspaceFolder}" },
             "group": "build",
-            "problemMatcher": [
-                "$msCompile"
+            "problemMatcher": ["$msCompile"]
+        },
+        {
+            "label": "CMake: Configure (Release)",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "-B", "${workspaceFolder}/build/vs-x64-Release",
+                "-S", "${workspaceFolder}",
+                "-G", "Ninja",
+                "-DCMAKE_BUILD_TYPE=Release",
+                "-DCMAKE_C_COMPILER=cl.exe",
+                "-DCMAKE_CXX_COMPILER=cl.exe"
             ],
-            "detail": "CMake build (RelWithDebInfo)"
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": "build",
+            "problemMatcher": []
         },
         {
             "label": "CMake: Build (Release)",
             "type": "shell",
             "command": "cmake",
             "args": [
-                "--build", "${workspaceFolder}/out/build/x64-Release",
+                "--build", "${workspaceFolder}/build/vs-x64-Release",
                 "--config", "Release"
             ],
-            "options": {
-                "cwd": "${workspaceFolder}"
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": {
+                "kind": "build",
+                "isDefault": true
             },
-            "group": "build",
-            "problemMatcher": [
-                "$msCompile"
-            ],
-            "detail": "CMake build (Release)"
-        },
-        {
-            "label": "CMake: Clean (Debug)",
-            "type": "shell",
-            "command": "cmake",
-            "args": [
-                "--build", "${workspaceFolder}/out/build/x64-Debug",
-                "--target", "clean"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "problemMatcher": [],
-            "detail": "CMake clean (Debug)"
+            "problemMatcher": ["$msCompile"]
         }
     ]
 }

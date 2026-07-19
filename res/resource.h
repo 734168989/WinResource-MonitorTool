@@ -41,6 +41,7 @@
 #define IDC_HELP_TAB      2027
 #define IDC_HELP_CLOSE    2028
 #define IDC_HELP_TEXT     2029
+#define IDC_GENERATE_REPORT_CHECK 2030
 
 // Timers
 #define IDT_DISPLAY_UPDATE 3001

@@ -1,4 +1,4 @@
-# 挂机电脑资源监测软件 V3.3
+# 挂机电脑资源监测软件 V3.4
 
 [![C++](https://img.shields.io/badge/C%2B%2B-17-blue)](https://en.cppreference.com/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%207%2B%20x64-lightgrey)](https://www.microsoft.com/windows)
@@ -488,6 +488,6 @@ cmake --build build --target clean
 
 **作者**：无人机
 
-**版本**：V3.3
+**版本**：V3.4
 
 **License**：MIT

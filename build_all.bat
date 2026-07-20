@@ -1,7 +1,7 @@
 @echo off
 cd /d "%~dp0"
 echo ============================================
-echo  MonitorTool V3.3 — Build & Generate VS Solution
+echo  MonitorTool V3.4 — Build & Generate VS Solution
 echo ============================================
 
 rem Step 1: Generate VS solution from CMakeLists.txt

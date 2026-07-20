@@ -19,7 +19,7 @@ static wchar_t g_helpTab0[1024]; static bool g_helpTab0Init = false;
 static const wchar_t* GetHelpTab0() {
     if (!g_helpTab0Init) {
         swprintf_s(g_helpTab0, 1024,
-            L"【挂机电脑资源监测软件 V3.3】\r\n\r\n"
+            L"【挂机电脑资源监测软件 V3.4】\r\n\r\n"
             L"作者：无人机\r\n编译时间：%s\r\n\r\n"
             L"本软件是一款专业的 Windows 系统资源监测工具，专为挂机场\r\n"
             L"景设计。可无人值守持续记录 CPU、内存、网络流量及指定进\r\n"

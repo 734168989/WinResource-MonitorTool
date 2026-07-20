@@ -501,7 +501,7 @@ bool ExcelExporter::Export(const wchar_t* outputDir, double startTimestamp,
     wcsftime(timestamp, 32, L"%Y%m%d%H%M%S", &tm_start);
 
     wchar_t filePath[MAX_PATH];
-    swprintf_s(filePath, MAX_PATH, L"%s\\挂机电脑资源监测软件V3.3_%s.xlsx", outputDir, timestamp);
+    swprintf_s(filePath, MAX_PATH, L"%s\\挂机电脑资源监测软件V3.4_%s.xlsx", outputDir, timestamp);
     wcscpy_s(m_lastFilePath, MAX_PATH, filePath);
 
     // Normalize path separators

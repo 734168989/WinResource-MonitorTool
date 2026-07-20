@@ -52,7 +52,7 @@ HWND CreateMainWindow(HINSTANCE hInstance) {
     HWND hWnd = CreateWindowExW(
         WS_EX_APPWINDOW | WS_EX_WINDOWEDGE,
         L"MonitorToolMainWindow",
-        L"挂机电脑资源监测软件 V3.3",
+        L"挂机电脑资源监测软件 V3.4",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
         x, y, winW, winH,
         nullptr, nullptr, hInstance, nullptr

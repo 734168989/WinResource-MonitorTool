@@ -280,7 +280,7 @@ std::string HtmlChartExporter::BuildHtml(
     html += ".header h1{font-size:22px;color:#1a1a2e;margin-bottom:6px}\r\n";
     html += ".header .time{font-size:13px;color:#636e72}\r\n";
     html += ".charts{max-width:1600px;margin:0 auto;display:flex;flex-direction:column;gap:24px}\r\n";
-    html += ".card{background:#fff;border-radius:12px;padding:24px 28px 16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}\r\n";
+    html += ".card{background:#fff;border-radius:12px;padding:24px 28px 16px;box-shadow:0 1px 3px rgba(0,0,0,.08);position:relative}\r\n";
     html += ".card h2{font-size:16px;color:#2d3436;margin-bottom:2px}\r\n";
     html += ".card .sub{font-size:12px;color:#b2bec3;margin-bottom:12px}\r\n";
     html += ".card canvas{width:100%;height:400px;display:block}\r\n";
@@ -313,6 +313,23 @@ std::string HtmlChartExporter::BuildHtml(
     html += ".fbtn:hover{background:#2980b9}\r\n";
     html += ".filter-info{font-size:12px;color:#b2bec3;margin-top:8px}\r\n";
     html += ".card.hidden{display:none}\r\n";
+    html += ".card.zoomed{border:2px dashed #3498db}
+";
+    html += ".card .reset-btn{position:absolute;top:18px;right:24px;padding:4px 12px;background:#3498db;color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer;z-index:5;display:none}
+";
+    html += ".card .reset-btn:hover{background:#2980b9}
+";
+    html += ".card.zoomed .reset-btn{display:inline-block}
+";
+    html += ".tip-box{position:absolute;pointer-events:none;background:rgba(44,62,80,0.92);color:#fff;padding:8px 12px;border-radius:6px;font-size:12px;line-height:1.6;white-space:nowrap;z-index:10;display:none;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+";
+    html += ".tip-box .tip-val{font-weight:bold;color:#74b9ff}
+";
+    html += "/* ---- Zoom & Tooltip ---- */\r\n";
+    html += ".zoom-reset{display:none;position:absolute;top:8px;right:16px;padding:4px 12px;border:1px solid #3498db;border-radius:4px;background:#ebf5fb;color:#3498db;font-size:12px;cursor:pointer;z-index:5}\r\n";
+    html += ".zoom-reset:hover{background:#3498db;color:#fff}\r\n";
+    html += ".chart-tooltip{display:none;position:fixed;z-index:999;background:rgba(44,62,80,0.92);color:#fff;padding:8px 14px;border-radius:6px;font-size:13px;line-height:1.8;pointer-events:none;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.2)}\r\n";
+    html += ".card canvas{cursor:crosshair}\r\n";
     html += "</style>\r\n</head>\r\n<body>\r\n";
 
     // ---- Collect software→PIDs mapping for filter dropdowns ----
@@ -397,6 +414,9 @@ std::string HtmlChartExporter::BuildHtml(
     html += "<div class=\"filter-info\" id=\"fInfo\"></div>\r\n";
     html += "</div>\r\n";
 
+    html += "<div class=\"tip-box\" id=\"tipBox\"></div>
+";
+
     html += "<div class=\"charts\">\r\n";
 
     // Colors per chart
@@ -419,12 +439,19 @@ std::string HtmlChartExporter::BuildHtml(
         html += "\" data-peak=\"";
         html += peakBuf;
         html += "\">\r\n";
+        html += "<button class=\"reset-btn\" type=\"button\">↺ 重置</button>
+";
         html += "<h2>";
         html += EscapeHtml(cd.title);
         html += "</h2>\r\n";
         html += "<div class=\"sub\">";
         html += EscapeHtml(cd.subtitle);
         html += "</div>\r\n";
+        html += "<button class=\"zoom-reset\" id=\"rz_c";
+        html += idxBuf;
+        html += "\" onclick=\"window.resetZoom('c";
+        html += idxBuf;
+        html += "')\">↩ 重置缩放</button>\r\n";
         html += "<canvas id=\"c";
         char idxBuf[16];
         snprintf(idxBuf, sizeof(idxBuf), "%zu", ci);
@@ -434,6 +461,7 @@ std::string HtmlChartExporter::BuildHtml(
     }
 
     html += "</div>\r\n";
+    html += "<div class=\"chart-tooltip\" id=\"chartTip\"></div>\r\n";
 
     // ---- Inline JavaScript: canvas line chart ----
     html += "<script>\r\n";
@@ -743,7 +771,7 @@ std::wstring HtmlChartExporter::Export(
     wchar_t timestamp[32];
     wcsftime(timestamp, 32, L"%Y%m%d%H%M%S", &tm_start);
     wchar_t filePath[MAX_PATH];
-    swprintf_s(filePath, MAX_PATH, L"%s\\挂机电脑资源监测软件V3.3_%s.html", outputDir, timestamp);
+    swprintf_s(filePath, MAX_PATH, L"%s\\挂机电脑资源监测软件V3.4_%s.html", outputDir, timestamp);
 
     HANDLE hFile = CreateFileW(filePath, GENERIC_WRITE, 0, nullptr,
                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);

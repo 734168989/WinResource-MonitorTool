@@ -8,8 +8,8 @@ IDI_MAIN_ICON ICON "MonitorTool.ico"
 
 // Version info
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     3,2,0,0
-PRODUCTVERSION  3,2,0,0
+FILEVERSION     3,4,0,0
+PRODUCTVERSION  3,4,0,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0
 FILEOS          VOS_NT_WINDOWS32
@@ -22,12 +22,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      ""
             VALUE "FileDescription",  "MonitorTool"
-            VALUE "FileVersion",      "3.2.0.0"
+            VALUE "FileVersion",      "3.4.0.0"
             VALUE "InternalName",     "MonitorTool"
             VALUE "LegalCopyright",   ""
             VALUE "OriginalFilename", "MonitorTool.exe"
             VALUE "ProductName",      "MonitorTool"
-            VALUE "ProductVersion",   "3.2"
+            VALUE "ProductVersion",   "3.4"
         END
     END
     BLOCK "VarFileInfo"

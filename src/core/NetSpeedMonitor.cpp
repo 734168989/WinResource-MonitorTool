@@ -246,63 +246,67 @@ void NetSpeedMonitor::QueryDelta(DWORD pid, ULONGLONG& bytesSent,
     QueryTcp(pid, bytesSent, bytesRecv);
     QueryUdp(pid, bytesSent, bytesRecv);
 
-    // GC every 10 calls — only clean up stale entries for THIS pid
+    // GC every 10 calls — clean stale entries for THIS pid,
+    // and every 100 calls do a full sweep of ALL entries.
     if (++m_gcCounter >= 10) {
         m_gcCounter = 0;
-        // 只遍历当前 PID 的连接 key，清理已关闭的连接
+        static int fullGcCounter = 0;
+        bool doFullGc = (++fullGcCounter >= 10);  // full sweep every 100 queries
+
         for (auto it = m_connMap.begin(); it != m_connMap.end(); ) {
-            if (it->first.pid == pid) {
-                // 检测此连接是否仍然活跃：遍历系统 TCP 表查找匹配项
-                bool alive = false;
-                for (int af = 0; af < 2 && !alive; af++) {
-                    DWORD sz = 0;
-                    int family = (af == 0) ? AF_INET : AF_INET6;
-                    GetExtendedTcpTable(nullptr, &sz, FALSE, family,
-                                        TCP_TABLE_OWNER_PID_CONNECTIONS, 0);
-                    if (!sz) continue;
-                    if (af == 0) {
-                        PMIB_TCPTABLE_OWNER_PID pT = (PMIB_TCPTABLE_OWNER_PID)malloc(sz);
-                        if (pT && GetExtendedTcpTable(pT, &sz, FALSE, family,
-                            TCP_TABLE_OWNER_PID_CONNECTIONS, 0) == NO_ERROR) {
-                            for (DWORD i = 0; i < pT->dwNumEntries; i++) {
-                                auto& r = pT->table[i];
-                                if (r.dwOwningPid != (DWORD)pid) continue;
-                                ConnKey ck = {};
-                                ck.pid = pid;
-                                FillV4Mapped(ck.localAddr, r.dwLocalAddr);
-                                FillV4Mapped(ck.remoteAddr, r.dwRemoteAddr);
-                                ck.localPort = (USHORT)r.dwLocalPort;
-                                ck.remotePort = (USHORT)r.dwRemotePort;
-                                if (!(ck < it->first) && !(it->first < ck)) { alive = true; break; }
-                            }
+            // Normal sweep: only current PID.  Full sweep: all PIDs.
+            if (!doFullGc && it->first.pid != pid) { ++it; continue; }
+
+            DWORD checkPid = doFullGc ? it->first.pid : pid;
+
+            // Check if this connection is still alive
+            bool alive = false;
+            for (int af = 0; af < 2 && !alive; af++) {
+                DWORD sz = 0;
+                int family = (af == 0) ? AF_INET : AF_INET6;
+                GetExtendedTcpTable(nullptr, &sz, FALSE, family,
+                                    TCP_TABLE_OWNER_PID_CONNECTIONS, 0);
+                if (!sz) continue;
+                if (af == 0) {
+                    PMIB_TCPTABLE_OWNER_PID pT = (PMIB_TCPTABLE_OWNER_PID)malloc(sz);
+                    if (pT && GetExtendedTcpTable(pT, &sz, FALSE, family,
+                        TCP_TABLE_OWNER_PID_CONNECTIONS, 0) == NO_ERROR) {
+                        for (DWORD i = 0; i < pT->dwNumEntries; i++) {
+                            auto& r = pT->table[i];
+                            if (r.dwOwningPid != checkPid) continue;
+                            ConnKey ck = {};
+                            ck.pid = checkPid;
+                            FillV4Mapped(ck.localAddr, r.dwLocalAddr);
+                            FillV4Mapped(ck.remoteAddr, r.dwRemoteAddr);
+                            ck.localPort = (USHORT)r.dwLocalPort;
+                            ck.remotePort = (USHORT)r.dwRemotePort;
+                            if (!(ck < it->first) && !(it->first < ck)) { alive = true; break; }
                         }
-                        if (pT) free(pT);
-                    } else {
-                        PMIB_TCP6TABLE_OWNER_PID pT = (PMIB_TCP6TABLE_OWNER_PID)malloc(sz);
-                        if (pT && GetExtendedTcpTable(pT, &sz, FALSE, family,
-                            TCP_TABLE_OWNER_PID_CONNECTIONS, 0) == NO_ERROR) {
-                            for (DWORD i = 0; i < pT->dwNumEntries; i++) {
-                                auto& r = pT->table[i];
-                                if (r.dwOwningPid != (DWORD)pid) continue;
-                                ConnKey ck = {};
-                                ck.pid = pid;
-                                memcpy(ck.localAddr, r.ucLocalAddr, 16);
-                                memcpy(ck.remoteAddr, r.ucRemoteAddr, 16);
-                                ck.localPort = (USHORT)r.dwLocalPort;
-                                ck.remotePort = (USHORT)r.dwRemotePort;
-                                if (!(ck < it->first) && !(it->first < ck)) { alive = true; break; }
-                            }
-                        }
-                        if (pT) free(pT);
                     }
+                    if (pT) free(pT);
+                } else {
+                    PMIB_TCP6TABLE_OWNER_PID pT = (PMIB_TCP6TABLE_OWNER_PID)malloc(sz);
+                    if (pT && GetExtendedTcpTable(pT, &sz, FALSE, family,
+                        TCP_TABLE_OWNER_PID_CONNECTIONS, 0) == NO_ERROR) {
+                        for (DWORD i = 0; i < pT->dwNumEntries; i++) {
+                            auto& r = pT->table[i];
+                            if (r.dwOwningPid != checkPid) continue;
+                            ConnKey ck = {};
+                            ck.pid = checkPid;
+                            memcpy(ck.localAddr, r.ucLocalAddr, 16);
+                            memcpy(ck.remoteAddr, r.ucRemoteAddr, 16);
+                            ck.localPort = (USHORT)r.dwLocalPort;
+                            ck.remotePort = (USHORT)r.dwRemotePort;
+                            if (!(ck < it->first) && !(it->first < ck)) { alive = true; break; }
+                        }
+                    }
+                    if (pT) free(pT);
                 }
-                if (!alive)
-                    it = m_connMap.erase(it);
-                else
-                    ++it;
-            } else {
-                ++it;
             }
+            if (!alive)
+                it = m_connMap.erase(it);
+            else
+                ++it;
         }
     }
     LeaveCriticalSection(&m_cs);

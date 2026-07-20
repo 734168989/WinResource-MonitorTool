@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(挂机电脑资源监测软件 VERSION 3.4 LANGUAGES CXX)
+project(挂机电脑资源监测软件 VERSION 3.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,6 +20,7 @@ set(SOURCES
     src/ui/MainWindow.cpp
     src/ui/HelpDialog.cpp
     src/utils/DataBuffer.cpp
+    src/utils/DataLogger.cpp
     src/utils/ConfigManager.cpp
     src/utils/ExcelExporter.cpp
     src/utils/HtmlChartExporter.cpp
@@ -33,6 +34,7 @@ set(HEADERS
     include/ui/HelpDialog.h
     include/utils/DataModels.h
     include/utils/DataBuffer.h
+    include/utils/DataLogger.h
     include/utils/ConfigManager.h
     include/utils/ExcelExporter.h
     include/utils/HtmlChartExporter.h
@@ -155,9 +157,10 @@ foreach(TGT MonitorTool MonitorTool_Release)
     )
 endforeach()
 
-# Release 目标输出为 MonitorTool_Release.exe
+# Release 目标输出为 MonitorTool_Release.exe，静态链接 CRT 避免缺少 DLL
 set_target_properties(MonitorTool_Release PROPERTIES
     OUTPUT_NAME "MonitorTool_Release"
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
 )
 
 # ============================================================================

@@ -396,11 +396,25 @@ std::string HtmlChartExporter::BuildHtml(
     }
     html += "<div class=\"header\">\r\n";
     html += "<h1>资源监测趋势报告</h1>\r\n";
-    html += "<div style=\"font-size:13px;color:#3498db;margin-bottom:6px\">工具: 挂机电脑资源监测软件 V3.4</div>\r\n";
+    html += "<div style=\"font-size:13px;color:#3498db;margin-bottom:6px\">工具: 挂机电脑资源监测软件 V3.5</div>\r\n";
     html += "<div class=\"time\">监测开始: ";
     html += EscapeHtml(fileTimeLabel);
     html += "  →  结束: ";
     html += EscapeHtml(endTimeLabel);
+    // Duration
+    if (!systemData.empty()) {
+        double durSec = systemData.back().runSeconds;
+        int dSec = (int)durSec;
+        int h = dSec / 3600, m = (dSec % 3600) / 60, s = dSec % 60;
+        char durBuf[64];
+        if (h > 0)
+            snprintf(durBuf, sizeof(durBuf), "  |  监测时长: %d小时%d分%d秒", h, m, s);
+        else if (m > 0)
+            snprintf(durBuf, sizeof(durBuf), "  |  监测时长: %d分%d秒", m, s);
+        else
+            snprintf(durBuf, sizeof(durBuf), "  |  监测时长: %d秒", s);
+        html += durBuf;
+    }
     html += "  |  采样点数: ";
     char numBuf[32];
     snprintf(numBuf, sizeof(numBuf), "%zu", systemData.size());
@@ -871,6 +885,15 @@ std::string HtmlChartExporter::BuildHtml(
     html += "})();\r\n";
     html += "</script>\r\n</body>\r\n</html>";
 
+    // Release ChartData memory back to OS — charts hold full copies of all
+    // labels (std::wstring) and values, which fragment the CRT heap over time.
+    for (auto& cd : charts) {
+        cd.labels.clear();  cd.labels.shrink_to_fit();
+        cd.values.clear();  cd.values.shrink_to_fit();
+    }
+    charts.clear();
+    charts.shrink_to_fit();
+
     return html;
 }
 
@@ -903,5 +926,10 @@ std::wstring HtmlChartExporter::Export(
     WriteFile(hFile, html.data(), (DWORD)html.size(), &written, nullptr);
     CloseHandle(hFile);
 
-    return (written == html.size()) ? filePath : L"";
+    bool ok = (written == html.size());
+    // Return the large HTML string memory to the OS
+    html.clear();
+    html.shrink_to_fit();
+
+    return ok ? filePath : L"";
 }

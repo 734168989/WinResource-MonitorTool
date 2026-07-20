@@ -691,13 +691,20 @@ static bool WriteZipToHandle(HANDLE hFile, const std::vector<ZipEntry>& entries)
 }
 
 bool ExcelExporter::BeginExport(const wchar_t* outputDir, double startTimestamp) {
+    return BeginExportPart(outputDir, startTimestamp, 0);
+}
+
+bool ExcelExporter::BeginExportPart(const wchar_t* outputDir, double startTimestamp, int part) {
     // Build filename
     time_t startT = (time_t)startTimestamp;
     struct tm tm_start;
     localtime_s(&tm_start, &startT);
     wchar_t timestamp[32];
     wcsftime(timestamp, 32, L"%Y%m%d%H%M%S", &tm_start);
-    swprintf_s(m_lastFilePath, MAX_PATH, L"%s\\monitor_data_%s.xlsx", outputDir, timestamp);
+    if (part > 0)
+        swprintf_s(m_lastFilePath, MAX_PATH, L"%s\\monitor_data_%s_Part%d.xlsx", outputDir, timestamp, part);
+    else
+        swprintf_s(m_lastFilePath, MAX_PATH, L"%s\\monitor_data_%s.xlsx", outputDir, timestamp);
 
     // Open file with write lock (FILE_SHARE_READ → external open is read-only)
     m_hFile = CreateFileW(m_lastFilePath, GENERIC_READ | GENERIC_WRITE,

@@ -6,6 +6,7 @@
 #include <map>
 #include <string>
 #include "DataBuffer.h"
+#include "DataLogger.h"
 #include "SystemMonitor.h"
 #include "ProcessMonitor.h"
 #include "ExcelExporter.h"
@@ -58,7 +59,6 @@ struct MainWindowState {
     HINSTANCE hInst;
 
     // Group boxes
-    HWND hConfigGroup;
     HWND hItemsGroup;
     HWND hControlGroup;
 
@@ -89,6 +89,9 @@ struct MainWindowState {
     // Output
     HWND hOutputDirEdit;
     HWND hBrowseDirBtn;
+    HWND hSavePathExcel;     // saved Excel file path display
+    HWND hSavePathHtml;      // saved HTML file path display
+    HWND hSavePathTip;       // tooltip for full path on hover
 
     // Control buttons
     HWND hStartBtn;
@@ -116,6 +119,7 @@ struct MainWindowState {
 
     // Core components
     DataBuffer dataBuffer;
+    DataLogger dataLogger;
     SystemMonitor systemMonitor;
     NetSpeedMonitor netSpeedMonitor;
     std::vector<ProcessMonitor*> processMonitors;
@@ -125,7 +129,9 @@ struct MainWindowState {
     int lastFlushSystemIndex;
     DWORD lastFlushTick;
     DWORD lastHtmlFlushTick;    // throttle HTML report regeneration
+    DWORD lastDataTrimTick;     // throttle periodic capacity compaction
     bool isFlushing;             // re-entrancy guard for Excel flush
+    int  rotationPart;           // _PartN counter for multi-file rotation
 
     // Fonts
     HFONT hDefaultFont;
@@ -140,6 +146,10 @@ struct MainWindowState {
 
     // Config path
     wchar_t configPath[MAX_PATH];
+
+    // Full paths for save-path tooltips
+    std::wstring savedExcelPath;
+    std::wstring savedHtmlPath;
 
     // System columns widths
     int sysColWidths[SYS_COL_COUNT];

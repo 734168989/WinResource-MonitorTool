@@ -52,7 +52,7 @@ HWND CreateMainWindow(HINSTANCE hInstance) {
     HWND hWnd = CreateWindowExW(
         WS_EX_APPWINDOW | WS_EX_WINDOWEDGE,
         L"MonitorToolMainWindow",
-        L"挂机电脑资源监测软件 V3.4",
+        L"挂机电脑资源监测软件 V3.5",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
         x, y, winW, winH,
         nullptr, nullptr, hInstance, nullptr
@@ -115,7 +115,9 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         s->lastFlushSystemIndex = 0;
         s->lastFlushTick = 0;
         s->lastHtmlFlushTick = 0;
+        s->lastDataTrimTick = 0;
         s->isFlushing = false;
+        s->rotationPart = 0;
         s->statusBarHeight = 28;
 
         // Display offset tracking
@@ -184,14 +186,21 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
     }
 
     case WM_CTLCOLORSTATIC: {
-        // 状态标签：根据内容显示不同颜色
-        if (s && (HWND)lParam == s->hStatusLabel) {
-            SetTextColor((HDC)wParam, s->statusColor);
-            SetBkMode((HDC)wParam, TRANSPARENT);
+        HDC hdc = (HDC)wParam;
+        HWND hCtrl = (HWND)lParam;
+        // Status label: use dynamic color
+        if (s && hCtrl == s->hStatusLabel) {
+            SetTextColor(hdc, s->statusColor);
+            SetBkMode(hdc, TRANSPARENT);
             return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
         }
-        // 其他 STATIC 控件用系统背景色
-        SetBkMode((HDC)wParam, TRANSPARENT);
+        // Save-path labels: link-like blue
+        if (s && (hCtrl == s->hSavePathExcel || hCtrl == s->hSavePathHtml)) {
+            SetTextColor(hdc, RGB(0, 120, 215));
+            SetBkMode(hdc, TRANSPARENT);
+            return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
+        }
+        SetBkMode(hdc, TRANSPARENT);
         return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
     }
 
@@ -200,45 +209,120 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             UpdateDisplay(s);
             // Flush Excel with adaptive interval + re-entrancy guard
             DWORD tick = GetTickCount();
-            int sysCount = (int)s->dataBuffer.GetSystemDataRef().size();
-            if (sysCount > s->lastFlushSystemIndex && !s->isFlushing) {
-                int newRows = sysCount - s->lastFlushSystemIndex;
-                // Adaptive interval: 2s normal, 5s when >2000 new rows
-                DWORD interval = (newRows > 2000) ? 5000 : 2000;
+            size_t sysCount = s->dataBuffer.GetSystemCount();
+            if ((int)sysCount > s->lastFlushSystemIndex && !s->isFlushing) {
+                int newRows = (int)sysCount - s->lastFlushSystemIndex;
+                // Interval: 10s normal, 30s when idle.  Much less frequent than
+                // the old 2s to avoid excessive memory churn from full copies.
+                DWORD interval = (newRows > 50) ? 10000 : 10000;
                 if ((tick - s->lastFlushTick) >= interval) {
                     s->isFlushing = true;
-                    s->lastFlushSystemIndex = sysCount;
+                    s->lastFlushSystemIndex = (int)sysCount;
                     s->lastFlushTick = tick;
-                    auto& cfg = ConfigManager::Instance().GetConfig();
-                    auto sysCopy = s->dataBuffer.GetSystemDataCopy();
-                    std::vector<MonitorProcess> procs;
-                    std::vector<std::vector<ProcessMonitorData>> procData;
-                    for (auto* pm : s->processMonitors) {
-                        MonitorProcess mp = {};
-                        wcscpy_s(mp.name, MAX_PROCESS_NAME, pm->GetProcessName());
-                        mp.enabled = true;
-                        procs.push_back(mp);
-                        procData.push_back(s->dataBuffer.GetProcessDataCopy(pm->GetProcessName()));
+                    {
+                        auto& cfg = ConfigManager::Instance().GetConfig();
+                        auto sysCopy = s->dataBuffer.GetSystemDataCopy();
+                        std::vector<MonitorProcess> procs;
+                        std::vector<std::vector<ProcessMonitorData>> procData;
+                        for (auto* pm : s->processMonitors) {
+                            MonitorProcess mp = {};
+                            wcscpy_s(mp.name, MAX_PROCESS_NAME, pm->GetProcessName());
+                            mp.enabled = true;
+                            procs.push_back(mp);
+                            procData.push_back(s->dataBuffer.GetProcessDataCopy(pm->GetProcessName()));
+                        }
+                        s->excelExporter.FlushExport(sysCopy, procs, procData, cfg.netUnit, cfg.netInterface);
+                        // Hint to the allocator that large vectors can release pages
+                        sysCopy.clear(); sysCopy.shrink_to_fit();
+                        for (auto& v : procData) { v.clear(); v.shrink_to_fit(); }
                     }
-                    s->excelExporter.FlushExport(sysCopy, procs, procData, cfg.netUnit, cfg.netInterface);
                     s->isFlushing = false;
                 }
             }
-            // HTML report: regenerate every 30 seconds if enabled
-            auto& reportCfg = ConfigManager::Instance().GetConfig();
-            if (reportCfg.generateReport && (tick - s->lastHtmlFlushTick) >= 30000) {
-                s->lastHtmlFlushTick = tick;
-                auto sysCopy2 = s->dataBuffer.GetSystemDataCopy();
-                std::vector<MonitorProcess> procs2;
-                std::vector<std::vector<ProcessMonitorData>> procData2;
+            // File rotation: when DataBuffer trimmed old rows, finalize current
+            // file and start a new _PartN file to avoid silent data loss.
+            if (s->dataBuffer.HasTrimmed() && !s->isFlushing) {
+                s->isFlushing = true;
+                s->dataBuffer.ResetTrimmed();
+                // Finalize current file
+                auto& cfg = ConfigManager::Instance().GetConfig();
+                auto sysCopy = s->dataBuffer.GetSystemDataCopy();
+                std::vector<MonitorProcess> procs;
+                std::vector<std::vector<ProcessMonitorData>> procData;
                 for (auto* pm : s->processMonitors) {
                     MonitorProcess mp = {};
                     wcscpy_s(mp.name, MAX_PROCESS_NAME, pm->GetProcessName());
                     mp.enabled = true;
-                    procs2.push_back(mp);
-                    procData2.push_back(s->dataBuffer.GetProcessDataCopy(pm->GetProcessName()));
+                    procs.push_back(mp);
+                    procData.push_back(s->dataBuffer.GetProcessDataCopy(pm->GetProcessName()));
                 }
-                HtmlChartExporter::Export(reportCfg.outputDir, s->monitorStartTime, sysCopy2, procs2, procData2, reportCfg.netInterface);
+                s->excelExporter.FlushExport(sysCopy, procs, procData, cfg.netUnit, cfg.netInterface);
+                s->excelExporter.EndExport();
+                // Clear buffer and start new part
+                s->dataBuffer.Clear();
+                s->lastFlushSystemIndex = 0;
+                s->m_sysDisplayOffset = 0;
+                for (auto& tab : s->processTabs)
+                    tab.lastDataIdx = -1;
+                s->rotationPart++;
+                s->excelExporter.SetNetUnit(cfg.netUnit);
+                s->excelExporter.SetNetInterface(cfg.netInterface);
+                s->excelExporter.BeginExportPart(cfg.outputDir, s->monitorStartTime, s->rotationPart);
+                s->isFlushing = false;
+            }
+            // HTML report: regenerate every 2 minutes
+            auto& reportCfg = ConfigManager::Instance().GetConfig();
+            if (reportCfg.generateReport && (tick - s->lastHtmlFlushTick) >= 120000) {
+                s->lastHtmlFlushTick = tick;
+                {
+                    auto sysCopy2 = s->dataBuffer.GetSystemDataCopy();
+                    std::vector<MonitorProcess> procs2;
+                    std::vector<std::vector<ProcessMonitorData>> procData2;
+                    for (auto* pm : s->processMonitors) {
+                        MonitorProcess mp = {};
+                        wcscpy_s(mp.name, MAX_PROCESS_NAME, pm->GetProcessName());
+                        mp.enabled = true;
+                        procs2.push_back(mp);
+                        procData2.push_back(s->dataBuffer.GetProcessDataCopy(pm->GetProcessName()));
+                    }
+                    HtmlChartExporter::Export(reportCfg.outputDir, s->monitorStartTime, sysCopy2, procs2, procData2, reportCfg.netInterface);
+                    // Release memory back to OS after large export
+                    sysCopy2.clear(); sysCopy2.shrink_to_fit();
+                    for (auto& v : procData2) { v.clear(); v.shrink_to_fit(); }
+                }
+            }
+
+            // Periodic compaction + trim: shrink_to_fit every 2 min,
+            // then trim DataBuffer to ~15 min window (data is safe on disk)
+            if ((tick - s->lastDataTrimTick) >= 120000) {
+                s->lastDataTrimTick = tick;
+                size_t before = s->dataBuffer.GetTotalCount();
+                s->dataBuffer.CompactCapacity();
+                auto& trimCfg = ConfigManager::Instance().GetConfig();
+                int period = trimCfg.samplePeriod;
+                if (period < 1) period = 1;
+                size_t keepRows = (size_t)((5 * 60) / period);
+                s->dataBuffer.TrimOldData(keepRows);
+                size_t after = s->dataBuffer.GetTotalCount();
+                wchar_t dbg[256];
+                PROCESS_MEMORY_COUNTERS_EX pmc = { sizeof(pmc) };
+                SIZE_T privMB = 0;
+                if (K32GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc)))
+                    privMB = pmc.PrivateUsage / (1024 * 1024);
+                // Compact process heap to release freed pages
+                HeapCompact(GetProcessHeap(), 0);
+                swprintf_s(dbg, 256, L"[MemTrim] rows:%zu→%zu removed:%zu  PrivateUsage:%zuMB\r\n",
+                           before, after, before - after, privMB);
+                OutputDebugStringW(dbg);
+                // Reset display offsets since indices shifted
+                s->m_sysDisplayOffset = 0;
+                s->m_procDisplayOffsets.clear();
+                for (auto& tab : s->processTabs)
+                    tab.lastDataIdx = -1;
+                s->lastFlushSystemIndex = 0;
+                ListView_DeleteAllItems(s->hSystemListView);
+                for (auto& tab : s->processTabs)
+                    ListView_DeleteAllItems(tab.hListView);
             }
         }
         return 0;
@@ -400,6 +484,34 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             break;
 
         }      // end switch(id)
+
+        // Click save-path label → open folder (only if click is on text)
+        if (code == STN_CLICKED &&
+            (id == IDC_SAVE_PATH_EXCEL || id == IDC_SAVE_PATH_HTML)) {
+            HWND hLabel = (id == IDC_SAVE_PATH_EXCEL) ? s->hSavePathExcel : s->hSavePathHtml;
+            wchar_t buf[MAX_PATH];
+            GetWindowTextW(hLabel, buf, MAX_PATH);
+            if (buf[0]) {
+                HDC hdc = GetDC(hLabel);
+                HFONT hFont = (HFONT)SendMessageW(hLabel, WM_GETFONT, 0, 0);
+                if (hFont) SelectObject(hdc, hFont);
+                SIZE sz = {}; GetTextExtentPoint32W(hdc, buf, (int)wcslen(buf), &sz);
+                ReleaseDC(hLabel, hdc);
+                DWORD pos = GetMessagePos();
+                POINT pt = { GET_X_LPARAM(pos), GET_Y_LPARAM(pos) };
+                ScreenToClient(hLabel, &pt);
+                if (pt.x >= 0 && pt.x < sz.cx) {
+                    const std::wstring& path = (id == IDC_SAVE_PATH_EXCEL)
+                        ? s->savedExcelPath : s->savedHtmlPath;
+                    if (!path.empty()) {
+                        std::wstring dir = path;
+                        size_t p = dir.find_last_of(L"\\/");
+                        if (p != std::wstring::npos) dir.resize(p);
+                        ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                    }
+                }
+            }
+        }
         return 0;
     }          // end case WM_COMMAND
 
@@ -471,6 +583,16 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             OnTabChanged(s);
             return 0;
         }
+
+        // Tooltip text for save-path labels
+        if (nmh->code == TTN_NEEDTEXTW) {
+            NMTTDISPINFOW* ttdi = (NMTTDISPINFOW*)lParam;
+            if (ttdi->hdr.idFrom == (UINT_PTR)s->hSavePathExcel)
+                ttdi->lpszText = (LPWSTR)s->savedExcelPath.c_str();
+            else if (ttdi->hdr.idFrom == (UINT_PTR)s->hSavePathHtml)
+                ttdi->lpszText = (LPWSTR)s->savedHtmlPath.c_str();
+            return 0;
+        }
         break;
     }
 
@@ -539,6 +661,10 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             if (MessageBoxW(hWnd, L"监测正在进行中，确定要退出吗？",
                            L"确认", MB_YESNO | MB_ICONQUESTION) == IDNO)
                 return 0;
+            // Kill the display-update timer BEFORE StopMonitoring so the
+            // WM_TIMER handler cannot fire while we are tearing down
+            // processMonitors / DataBuffer / NetSpeedMonitor.
+            KillTimer(hWnd, IDT_DISPLAY_UPDATE);
             StopMonitoring(s);
         }
         DestroyWindow(hWnd);
@@ -594,11 +720,7 @@ void CreateChildControls(HWND hParent, MainWindowState* s) {
     HINSTANCE hi = s->hInst;
     int yBase = 8;
 
-    // ---- Monitor Config Group ----
-    s->hConfigGroup = CreateWindowExW(0, L"BUTTON", L"监测配置",
-        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        8, yBase, 874, 150, hParent, (HMENU)IDC_MONITOR_CONFIG_GROUP, hi, nullptr);
-
+    // ---- Monitor Config (no outer group box) ----
     int gy = 22;
     s->hProcessNameEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
         WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
@@ -623,24 +745,36 @@ void CreateChildControls(HWND hParent, MainWindowState* s) {
 
     gy += 30;
     // Process ListView with checkboxes
-    s->hProcessListView = CreateWindowExW(0, WC_LISTVIEWW, L"",
-        WS_CHILD | WS_VISIBLE | WS_BORDER | LVS_REPORT | LVS_SINGLESEL |
-        LVS_SHOWSELALWAYS | LVS_EX_CHECKBOXES,
+    s->hProcessListView = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL |
+        LVS_SHOWSELALWAYS,
         20, yBase + gy, 834, 90, hParent, (HMENU)IDC_PROCESS_LIST, hi, nullptr);
     ListView_SetExtendedListViewStyle(s->hProcessListView, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER);
 
-    // Columns: enabled, name, actions
+    // Smaller font so ~3 items fit without scrolling
+    {
+        HDC hdc = GetDC(hParent);
+        int ptH = -MulDiv(8, GetDeviceCaps(hdc, LOGPIXELSY), 72);
+        ReleaseDC(hParent, hdc);
+        HFONT hFont = CreateFontW(ptH, 0, 0, 0, FW_NORMAL, 0, 0, 0,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei");
+        if (hFont)
+            SendMessageW(s->hProcessListView, WM_SETFONT, (WPARAM)hFont, TRUE);
+    }
+
+    // Columns: checkbox, name, action — widths fill ListView for aligned gridlines
     LVCOLUMNW lvc = {};
     lvc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
     lvc.fmt = LVCFMT_CENTER;
-    lvc.cx = 40;
+    lvc.cx = 24;
     lvc.pszText = (LPWSTR)L"";
     ListView_InsertColumn(s->hProcessListView, 0, &lvc);
-    lvc.cx = 200;
+    lvc.cx = 740;
     lvc.fmt = LVCFMT_LEFT;
     lvc.pszText = (LPWSTR)L"软件名称";
     ListView_InsertColumn(s->hProcessListView, 1, &lvc);
-    lvc.cx = 50;
+    lvc.cx = 60;
     lvc.fmt = LVCFMT_CENTER;
     lvc.pszText = (LPWSTR)L"操作";
     ListView_InsertColumn(s->hProcessListView, 2, &lvc);
@@ -717,8 +851,37 @@ void CreateChildControls(HWND hParent, MainWindowState* s) {
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         612, itemsGroupY + iy, 45, 22, hParent, (HMENU)IDC_BROWSE_DIR_BTN, hi, nullptr);
 
+    // Save-path display lines — match log ListView font/style
+    iy += 28;
+    // Save-path labels — clickable on text only, tooltip on hover
+    s->hSavePathExcel = CreateWindowExW(0, L"STATIC", L"",
+        WS_CHILD | WS_VISIBLE | SS_LEFT | SS_ENDELLIPSIS | SS_NOTIFY,
+        20, itemsGroupY + iy, 830, 18, hParent, (HMENU)IDC_SAVE_PATH_EXCEL, hi, nullptr);
+    iy += 20;
+    s->hSavePathHtml = CreateWindowExW(0, L"STATIC", L"",
+        WS_CHILD | WS_VISIBLE | SS_LEFT | SS_ENDELLIPSIS | SS_NOTIFY,
+        20, itemsGroupY + iy, 830, 18, hParent, (HMENU)IDC_SAVE_PATH_HTML, hi, nullptr);
+
+    // Standard tooltip — shows full path on hover
+    s->hSavePathTip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+        WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP,
+        CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+        hParent, nullptr, hi, nullptr);
+    SendMessageW(s->hSavePathTip, TTM_SETMAXTIPWIDTH, 0, 800);
+    SendMessageW(s->hSavePathTip, TTM_SETDELAYTIME, TTDT_INITIAL, 300);
+    {
+        TOOLINFOW ti = { sizeof(ti) };
+        ti.uFlags = TTF_SUBCLASS | TTF_IDISHWND;
+        ti.hwnd = hParent;
+        ti.uId = (UINT_PTR)s->hSavePathExcel;
+        ti.lpszText = LPSTR_TEXTCALLBACKW;
+        SendMessageW(s->hSavePathTip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+        ti.uId = (UINT_PTR)s->hSavePathHtml;
+        SendMessageW(s->hSavePathTip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+    }
+
     // ---- Monitor Control Group ----
-    int ctrlGroupY = itemsGroupY + 130;
+    int ctrlGroupY = itemsGroupY + 180;
     s->hControlGroup = CreateWindowExW(0, L"BUTTON", L"监测控制",
         WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
         8, ctrlGroupY, 874, 68, hParent, (HMENU)IDC_MONITOR_CONTROL_GROUP, hi, nullptr);
@@ -876,24 +1039,59 @@ void LayoutControls(MainWindowState* s) {
     int margin = 8;
     int contentW = w - margin * 2;
 
-    // Config group
-    int configH = 150;
-    SetWindowPos(s->hConfigGroup, nullptr, margin, margin, contentW, configH, SWP_NOZORDER);
-    SetWindowPos(s->hProcessListView, nullptr, margin + 12, margin + 55,
-                 contentW - 24, 85, SWP_NOZORDER);
+    // Config area — no outer group box, ListView has its own clean border
+    SetWindowPos(s->hProcessListView, nullptr, margin + 4, margin + 55,
+                 contentW - 8, 85, SWP_NOZORDER);
+    // Fill columns to ListView width so gridlines align edge-to-edge
+    int lvWidth = contentW - 8 - GetSystemMetrics(SM_CXVSCROLL) - 4;
+    ListView_SetColumnWidth(s->hProcessListView, 0, 24);
+    ListView_SetColumnWidth(s->hProcessListView, 2, 60);
+    ListView_SetColumnWidth(s->hProcessListView, 1, lvWidth - 24 - 60);
 
-    // Items group
-    int itemsY = margin + configH + 8;
-    int itemsH = 120;
+    // Items group — includes save-path display
+    int itemsY = margin + 55 + 85 + 8;
+    int itemsH = 148;
     SetWindowPos(s->hItemsGroup, nullptr, margin, itemsY, contentW, itemsH, SWP_NOZORDER);
+
+    {
+        int y0 = itemsY + 24;
+        SetWindowPos(s->hCpuCheck,       nullptr, 20,  y0,     60, 22, SWP_NOZORDER);
+        SetWindowPos(s->hMemoryCheck,    nullptr, 85,  y0,     60, 22, SWP_NOZORDER);
+        SetWindowPos(s->hNetworkCheck,   nullptr, 150, y0,     50, 22, SWP_NOZORDER);
+        SetWindowPos(s->hNetUnitCombo,   nullptr, 203, y0,     80, 200, SWP_NOZORDER);
+        SetWindowPos(s->hGenerateReportCheck, nullptr, 295, y0, 110, 22, SWP_NOZORDER);
+
+        int y1 = itemsY + 50;
+        SetWindowPos(s->hSampleLabel,       nullptr, 20,  y1, 60, 22, SWP_NOZORDER);
+        SetWindowPos(s->hSamplePeriodEdit,  nullptr, 85,  y1, 50, 22, SWP_NOZORDER);
+        SetWindowPos(s->hSecondLabel,       nullptr, 140, y1, 25, 22, SWP_NOZORDER);
+        SetWindowPos(s->hNetInterfaceLabel, nullptr, 330, y1, 60, 22, SWP_NOZORDER);
+        SetWindowPos(s->hNetInterfaceCombo, nullptr, 400, y1, 200, 200, SWP_NOZORDER);
+        SetWindowPos(s->hRefreshInterfaceBtn,nullptr, 610, y1, 45, 22, SWP_NOZORDER);
+
+        int y2 = itemsY + 76;
+        SetWindowPos(s->hOutputDirLabel, nullptr, 20,  y2, 60, 22, SWP_NOZORDER);
+        SetWindowPos(s->hOutputDirEdit,  nullptr, 85,  y2, 520, 22, SWP_NOZORDER);
+        SetWindowPos(s->hBrowseDirBtn,   nullptr, 612, y2, 45, 22, SWP_NOZORDER);
+
+        int y3 = itemsY + 104;
+        SetWindowPos(s->hSavePathExcel, nullptr, 20, y3, contentW - 46, 18, SWP_NOZORDER);
+        int y4 = itemsY + 124;
+        SetWindowPos(s->hSavePathHtml,  nullptr, 20, y4, contentW - 46, 18, SWP_NOZORDER);
+    }
 
     // Control group
     int ctrlY = itemsY + itemsH + 8;
     int ctrlH = 68;
     SetWindowPos(s->hControlGroup, nullptr, margin, ctrlY, contentW, ctrlH, SWP_NOZORDER);
 
-    // Status label inside control group — right side
-    SetWindowPos(s->hStatusLabel, nullptr, w - 280, ctrlY + 21, 250, 26, SWP_NOZORDER);
+    // Reposition buttons and status label — vertically centered inside control group
+    {
+        int cy = ctrlY + 22;
+        SetWindowPos(s->hStartBtn,    nullptr, 20,  cy, 100, 28, SWP_NOZORDER);
+        SetWindowPos(s->hStopBtn,     nullptr, 130, cy, 100, 28, SWP_NOZORDER);
+        SetWindowPos(s->hStatusLabel, nullptr, w - 280, cy + 1, 250, 26, SWP_NOZORDER);
+    }
 
     // Tab control: right below control group
     int tabY = ctrlY + ctrlH + 8;
@@ -1259,6 +1457,8 @@ void StartMonitoring(MainWindowState* s) {
 
     s->lastFlushSystemIndex = 0;
     s->lastFlushTick = 0;
+    s->lastHtmlFlushTick = GetTickCount();
+    s->lastDataTrimTick = GetTickCount();
 
     // Start per-process network monitor
     if (!s->netSpeedMonitor.Start()) {
@@ -1269,6 +1469,9 @@ void StartMonitoring(MainWindowState* s) {
     s->excelExporter.SetNetUnit(cfg.netUnit);
     s->excelExporter.SetNetInterface(cfg.netInterface);
     s->excelExporter.BeginExport(cfg.outputDir, s->monitorStartTime);
+
+    // Begin disk-backed data logging
+    s->dataLogger.BeginLog(cfg.outputDir, s->monitorStartTime);
 
     // Create stop event
     s->hStopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -1297,13 +1500,29 @@ void StopMonitoring(MainWindowState* s) {
         SetEvent(s->hStopEvent);
     }
 
-    // Wait for thread to finish
+    // Wait for thread to finish with proper timeout handling.
+    // If the monitor thread is stuck in a slow API call (e.g. GetIfTable2,
+    // GetExtendedTcpTable), we must force-terminate it.  A zombie thread
+    // holding a raw pointer to `s` will crash (use-after-free) or hang
+    // indefinitely when `s` is deleted in WM_DESTROY, leaving a residual
+    // process in Task Manager.
     if (s->hMonitorThread) {
-        WaitForSingleObject(s->hMonitorThread, 10000); // 10 second timeout
+        DWORD waitResult = WaitForSingleObject(s->hMonitorThread, 10000);
+        if (waitResult == WAIT_TIMEOUT) {
+            // Thread is stuck — force-kill it.  The thread is a pure data
+            // collector; TerminateThread is safe here because:
+            //   - It only holds CRITICAL_SECTION briefly inside QueryDelta()
+            //   - No heap allocations are in-flight at the wait points
+            //   - All resources are cleaned up below
+            TerminateThread(s->hMonitorThread, 0);
+        }
         CloseHandle(s->hMonitorThread);
         s->hMonitorThread = nullptr;
     }
 
+    // Close the stop-event handle ONLY after the thread is confirmed dead.
+    // Closing it while the thread is still calling WaitForSingleObject on it
+    // is undefined behaviour (may return WAIT_FAILED / hang / crash).
     if (s->hStopEvent) {
         CloseHandle(s->hStopEvent);
         s->hStopEvent = nullptr;
@@ -1320,20 +1539,36 @@ void StopMonitoring(MainWindowState* s) {
     // Show saving indicator
     UpdateStatus(s, L"状态: 正在保存中…", RGB(255, 165, 0));  // orange
 
+    // Flush and close disk logger, then load full history for complete export
+    s->dataLogger.EndLog();
+
+    std::vector<SystemMonitorData> fullSys;
+    std::vector<std::wstring> fullProcNames;
+    std::vector<std::vector<ProcessMonitorData>> fullProcData;
+    bool loadedFromDisk = s->dataLogger.LoadAll(fullSys, fullProcNames, fullProcData);
+
+    // Fallback: if disk load fails, use whatever is in the in-memory DataBuffer
+    if (!loadedFromDisk || fullSys.empty()) {
+        fullSys = s->dataBuffer.GetSystemDataCopy();
+        fullProcNames.clear();
+        fullProcData.clear();
+        for (auto* pm : s->processMonitors) {
+            fullProcNames.push_back(pm->GetProcessName());
+            fullProcData.push_back(s->dataBuffer.GetProcessDataCopy(pm->GetProcessName()));
+        }
+    }
+
     // Final flush of all data to Excel
     {
         auto& cfg = ConfigManager::Instance().GetConfig();
-        auto sysCopy = s->dataBuffer.GetSystemDataCopy();
         std::vector<MonitorProcess> procs;
-        std::vector<std::vector<ProcessMonitorData>> procData;
-        for (auto* pm : s->processMonitors) {
+        for (auto& name : fullProcNames) {
             MonitorProcess mp = {};
-            wcscpy_s(mp.name, MAX_PROCESS_NAME, pm->GetProcessName());
+            wcscpy_s(mp.name, MAX_PROCESS_NAME, name.c_str());
             mp.enabled = true;
             procs.push_back(mp);
-            procData.push_back(s->dataBuffer.GetProcessDataCopy(pm->GetProcessName()));
         }
-        s->excelExporter.FlushExport(sysCopy, procs, procData, cfg.netUnit, cfg.netInterface);
+        s->excelExporter.FlushExport(fullSys, procs, fullProcData, cfg.netUnit, cfg.netInterface);
     }
     s->excelExporter.EndExport();
 
@@ -1341,29 +1576,54 @@ void StopMonitoring(MainWindowState* s) {
     auto& reportCfg = ConfigManager::Instance().GetConfig();
     std::wstring htmlPath;
     if (reportCfg.generateReport) {
-        auto sysCopy2 = s->dataBuffer.GetSystemDataCopy();
-        std::vector<MonitorProcess> procs2;
-        std::vector<std::vector<ProcessMonitorData>> procData2;
-        for (auto* pm : s->processMonitors) {
+        std::vector<MonitorProcess> procs;
+        for (auto& name : fullProcNames) {
             MonitorProcess mp = {};
-            wcscpy_s(mp.name, MAX_PROCESS_NAME, pm->GetProcessName());
+            wcscpy_s(mp.name, MAX_PROCESS_NAME, name.c_str());
             mp.enabled = true;
-            procs2.push_back(mp);
-            procData2.push_back(s->dataBuffer.GetProcessDataCopy(pm->GetProcessName()));
+            procs.push_back(mp);
         }
-        htmlPath = HtmlChartExporter::Export(reportCfg.outputDir, s->monitorStartTime, sysCopy2, procs2, procData2, reportCfg.netInterface);
+        htmlPath = HtmlChartExporter::Export(reportCfg.outputDir, s->monitorStartTime,
+            fullSys, procs, fullProcData, reportCfg.netInterface);
     }
 
+    // Delete temp log file after successful export
+    s->dataLogger.DeleteLog();
+
+    // Use a non‑blocking status update instead of MessageBoxW, which runs a
+    // nested modal message loop.  If the user walks away, MessageBoxW blocks
+    // WM_DESTROY → DestroyWindow → the window stays visible and the process
+    // looks hung in Task Manager.
     {
-        wchar_t msg[768];
+        wchar_t msg[512];
         if (!htmlPath.empty()) {
-            swprintf_s(msg, 768, L"数据已导出到 Excel 文件\r\n路径: %s\r\n\r\nHTML 趋势报告\r\n路径: %s",
-                       s->excelExporter.GetLastFilePath(), htmlPath.c_str());
+            swprintf_s(msg, 512, L"数据已保存 — Excel + HTML 报告");
         } else {
-            swprintf_s(msg, 768, L"数据已导出到 Excel 文件\r\n路径: %s",
-                       s->excelExporter.GetLastFilePath());
+            swprintf_s(msg, 512, L"数据已保存 — Excel: %s", s->excelExporter.GetLastFilePath());
         }
-        MessageBoxW(s->hMainWnd, msg, L"成功", MB_OK | MB_ICONINFORMATION);
+        UpdateStatus(s, msg, RGB(0, 180, 0));
+    }
+
+    // Show file paths in the save-path labels below output directory
+    {
+        const wchar_t* excel = s->excelExporter.GetLastFilePath();
+        s->savedExcelPath = excel;
+        s->savedHtmlPath = htmlPath;
+
+        const wchar_t* p = wcsrchr(excel, L'\\');
+        SetWindowTextW(s->hSavePathExcel, p ? p + 1 : excel);
+        if (s->hBoldFont) {
+            SendMessageW(s->hSavePathExcel, WM_SETFONT, (WPARAM)s->hBoldFont, TRUE);
+            SendMessageW(s->hSavePathHtml,  WM_SETFONT, (WPARAM)s->hBoldFont, TRUE);
+        }
+        if (!htmlPath.empty()) {
+            p = wcsrchr(htmlPath.c_str(), L'\\');
+            SetWindowTextW(s->hSavePathHtml, p ? p + 1 : htmlPath.c_str());
+            ShowWindow(s->hSavePathHtml, SW_SHOW);
+        } else {
+            SetWindowTextW(s->hSavePathHtml, L"");
+            ShowWindow(s->hSavePathHtml, SW_HIDE);
+        }
     }
 
     // Update UI state
@@ -1414,6 +1674,11 @@ DWORD WINAPI MonitorThreadProc(LPVOID param) {
             s->dataBuffer.AddSystemData(sysData);
         }
 
+        // Early stop check: Collect() can be slow (GetIfTable2 enumerates
+        // every NIC), and we don't want the shutdown timeout to fire.
+        if (WaitForSingleObject(s->hStopEvent, 0) == WAIT_OBJECT_0)
+            break;
+
         // Calculate NIC ratio for scaling per-process network data.
         // When a specific NIC is selected, per-process speeds are scaled by
         // (NIC traffic / total traffic).  For a disconnected NIC this ratio
@@ -1429,15 +1694,26 @@ DWORD WINAPI MonitorThreadProc(LPVOID param) {
         }
 
         // Collect process data (one entry per PID for same-name processes)
+        std::vector<std::wstring> procNames;
+        std::vector<std::vector<ProcessMonitorData>> allProcData;
         for (size_t i = 0; i < s->processMonitors.size(); i++) {
+            if (WaitForSingleObject(s->hStopEvent, 0) == WAIT_OBJECT_0)
+                break;
             auto procDataList = s->processMonitors[i]->Collect(runSeconds, &s->netSpeedMonitor);
-            for (auto& procData : procDataList) {
-                // Scale per-process network by NIC ratio
-                procData.netSendSpeed *= nicSendRatio;
-                procData.netRecvSpeed *= nicRecvRatio;
-                s->dataBuffer.AddProcessData(s->processMonitors[i]->GetProcessName(), procData);
+            std::vector<ProcessMonitorData> scaled;
+            for (auto& pd : procDataList) {
+                pd.netSendSpeed *= nicSendRatio;
+                pd.netRecvSpeed *= nicRecvRatio;
+                s->dataBuffer.AddProcessData(s->processMonitors[i]->GetProcessName(), pd);
+                scaled.push_back(pd);
             }
+            procNames.push_back(s->processMonitors[i]->GetProcessName());
+            allProcData.push_back(std::move(scaled));
         }
+
+        // Log sample to disk for data integrity
+        if (cfg.monitorCpu || cfg.monitorMemory || cfg.monitorNetwork)
+            s->dataLogger.AppendSample(sysData, procNames, allProcData);
 
         // Sleep for remaining sample period (interruptible)
         DWORD elapsed = GetTickCount() - iterStart;
@@ -1460,20 +1736,17 @@ void UpdateDisplay(MainWindowState* s) {
 }
 
 void UpdateSystemListView(MainWindowState* s) {
-    // Use thread-safe copy instead of raw reference to avoid data race
-    // with the monitor thread which concurrently calls AddSystemData()
-    auto sysData = s->dataBuffer.GetSystemDataCopy();
-    int totalCount = (int)sysData.size();
-
-    // Use actual ListView item count + display offset to find new items.
-    // This stays correct even when ListView is trimmed for display performance.
+    // Use thread-safe slice — only copy new items since last display,
+    // avoiding a full DataBuffer copy every 200ms.
     int displayedCount = ListView_GetItemCount(s->hSystemListView);
-    int startIdx = s->m_sysDisplayOffset + displayedCount;
+    size_t startIdx = s->m_sysDisplayOffset + displayedCount;
+    auto sysData = s->dataBuffer.GetSystemDataSlice(startIdx);
+    int totalNew = (int)sysData.size();
 
     // Add new items since last display
-    for (int i = startIdx; i < totalCount; i++) {
+    for (int i = 0; i < totalNew; i++) {
         const auto& d = sysData[i];
-        int lvIdx = displayedCount + (i - startIdx);  // ListView row index
+        int lvIdx = displayedCount + i;
 
         wchar_t buf[64];
         LVITEMW item = {};
@@ -1524,27 +1797,25 @@ void UpdateSystemListView(MainWindowState* s) {
 }
 
 void UpdateProcessListView(MainWindowState* s, ProcessTabInfo& tab) {
-    // Use thread-safe copy instead of raw pointer to avoid data race
-    // with the monitor thread which concurrently calls AddProcessData()
-    auto procData = s->dataBuffer.GetProcessDataCopy(tab.processName);
+    // Use thread-safe slice — only copy new items since last display
+    int startIdx = tab.lastDataIdx + 1;
+    auto procData = s->dataBuffer.GetProcessDataSlice(tab.processName, startIdx);
     if (procData.empty()) return;
 
-    int totalCount = (int)procData.size();
-    int startIdx = tab.lastDataIdx + 1;
-    if (startIdx >= totalCount) return;
+    int totalNew = (int)procData.size();
 
     // 收集新条目，按 runSeconds 分组（每个采集周期一组）
     struct PidGroup { double runSeconds; std::vector<int> indices; };
     std::vector<PidGroup> groups;
     int maxIdx = tab.lastDataIdx;
 
-    for (int i = startIdx; i < totalCount; i++) {
+    for (int i = 0; i < totalNew; i++) {
         double rs = procData[i].runSeconds;
         if (groups.empty() || fabs(groups.back().runSeconds - rs) > 0.001) {
             groups.push_back({rs, {}});
         }
         groups.back().indices.push_back(i);
-        if (i > maxIdx) maxIdx = i;
+        if (startIdx + i > maxIdx) maxIdx = startIdx + i;
     }
 
     // 每组只保留活跃度最高的 5 个 PID（UI 精简显示，DataBuffer 保留完整数据供 Excel 导出）

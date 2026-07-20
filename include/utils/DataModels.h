@@ -5,7 +5,7 @@
 
 #define MAX_PROCESS_NAME 260
 #define MAX_TIMESTAMP_LEN 20
-#define MAX_BUFFER_ROWS 2000000
+#define MAX_BUFFER_ROWS 500000
 
 struct SystemMonitorData {
     wchar_t timestamp[MAX_TIMESTAMP_LEN];
@@ -49,8 +49,11 @@ struct MonitorConfig {
     wchar_t         outputDir[MAX_PATH];
 };
 
-// Sentinel array to guarantee cfg->processes is never NULL after init
-static MonitorProcess g_emptyProcess;
+// Sentinel array to guarantee cfg->processes is never NULL after init.
+// MUST be 'inline' (not 'static') — 'static' in a header creates one copy per
+// translation unit, so &g_emptyProcess differs across .cpp files.  FreeConfig's
+// sentinel comparison would then fail, causing free() on a stack address.
+inline MonitorProcess g_emptyProcess;
 
 // Initialize config with clean empty state (no default processes)
 inline void InitEmptyConfig(MonitorConfig* cfg) {

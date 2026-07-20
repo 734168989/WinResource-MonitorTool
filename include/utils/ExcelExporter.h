@@ -24,6 +24,7 @@ public:
 
     // Real-time export: lock file during monitoring, update every cycle
     bool BeginExport(const wchar_t* outputDir, double startTimestamp);
+    bool BeginExportPart(const wchar_t* outputDir, double startTimestamp, int part);
     bool FlushExport(const std::vector<SystemMonitorData>& systemData,
                      const std::vector<MonitorProcess>& processes,
                      const std::vector<std::vector<ProcessMonitorData>>& allProcessData,

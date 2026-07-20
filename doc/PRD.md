@@ -532,6 +532,7 @@ monitor_data_20260719_143022.xlsx
 | 需管理员权限 | 进程 TCP 网络需要 UAC 提权 | manifest 内嵌 `requireAdministrator` |
 | 进程名精确匹配（含 .exe） | 不支持通配符 | 任务管理器复制进程名 |
 | UDP 流量为估算值 | 非精确到字节 | 按端点比例 + 每包 1400 字节估算 |
+| 进程网速为全网总量比例缩放 | 非精确 per-NIC per-process | 按 (选中网卡速度 / 全网总速度) 比例近似 |
 | 缓冲区上限 200 万行 | 超过丢弃最旧数据（~115天@5s） | 可调节 `MAX_BUFFER_ROWS` |
 | UI 仅展示前 10 PID | 同名 >10 进程时 UI 精简 | Excel 保留全部 PID |
 | 监测期间配置锁定 | 无法中途修改设置 | 停止后可修改 |
@@ -553,6 +554,7 @@ monitor_data_20260719_143022.xlsx
 | V3.1 | — | ncpa.cpl 同源网卡列表、已连接绿色加粗（OwnerDraw）、帮助系统完善（5 标签页） |
 | **V3.3** | 2026-07 | TCP/UDP 网络追踪修复、Excel/HTML 导出格式优化、DataBuffer 线程安全、文档完善 |
 | **V3.4** | 2026-07 | HTML 折线图重构为 Canvas 2D 自绘（X 轴框选缩放、点击坐标值、图表过滤器、双击重置）、HTML 文件命名与 Excel 统一、Y 轴比例自适应、X 轴 -45° 斜角标签、帮助系统完善、文档更新 |
+| **V3.4.1** | 2026-07-20 | 网卡识别增强（Alias+Description 双路匹配）、Excel/HTML 表头含网卡名、进程网速按网卡占比缩放、首行基线预热（Sleep+WarmUp 消除假零值）、线程安全加固（DataBuffer 加锁拷贝、volatile m_running）、死代码清理 |
 
 ---
 

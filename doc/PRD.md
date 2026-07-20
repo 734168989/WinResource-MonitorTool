@@ -54,7 +54,7 @@
 
 | 原则 | 说明 |
 |------|------|
-| **零外部依赖** | 所有功能手工实现（JSON 解析、ZIP writer、OOXML 生成、HTML Chart.js 图表） |
+| **零外部依赖** | 所有功能手工实现（JSON 解析、ZIP writer、OOXML 生成、HTML Canvas 2D 自绘图表） |
 | **数据安全** | 监测中每 2 秒实时写入 Excel，即使崩溃也不丢失已保存数据 |
 | **低资源占用** | 监测线程使用 `THREAD_PRIORITY_BELOW_NORMAL`，UI 200ms 定时刷新 |
 | **精确一致** | 内存值使用专用工作集（与任务管理器一致），网卡列表与 ncpa.cpl 同源 |
@@ -133,12 +133,12 @@
 | ID | 功能 | 优先级 | 说明 |
 |----|------|--------|------|
 | FR-EXPORT-01 | 自动导出 Excel (.xlsx) | P0 | 监测中每 2 秒实时写入，停止时最终保存 |
-| FR-EXPORT-02 | 自动导出 HTML 报告 | P1 | 每 60 秒刷新，停止时最终保存，Chart.js 折线图 |
+| FR-EXPORT-02 | 自动导出 HTML 报告 | P1 | 停止时自动生成，Canvas 2D 自绘折线图，支持 X 轴框选缩放、点击显示坐标值、图表过滤 |
 | FR-EXPORT-03 | 多 Sheet 分页 | P0 | 系统 Sheet + 各进程独立 Sheet |
 | FR-EXPORT-04 | 类型化单元格 | P1 | 日期列=日期序列号，整数=0 格式，小数=0.00 格式 |
 | FR-EXPORT-05 | 表头样式 | P1 | 加粗 + 浅蓝背景（#DCE6F1），居中 |
 | FR-EXPORT-06 | 列宽自适应 | P2 | 基于表头文字长度计算 |
-| FR-EXPORT-07 | HTML 深色主题 | P2 | 深色背景 + 响应式布局，浏览器直接打开 |
+| FR-EXPORT-07 | HTML 交互功能 | P2 | X 轴框选缩放、双击重置、点击 tooltip、图表过滤器 |
 
 ### 3.5 配置管理
 
@@ -174,7 +174,7 @@
 | 采样周期范围 | 1~60 秒（用户配置，推荐 5 秒） |
 | 数据缓冲区上限 | 2,000,000 条（~115 天 @5s 采样） |
 | Excel 实时刷新 | 2 秒（常规）/ 5 秒（积压 >2000 行） |
-| HTML 报告刷新 | 60 秒 |
+| HTML 报告生成 | 停止监测时 |
 | 监测线程优先级 | `THREAD_PRIORITY_BELOW_NORMAL` |
 | 自身 CPU 占用 | < 1%（@5s 采样周期） |
 | 自身内存占用 | < 50 MB（含缓冲数据） |
@@ -222,7 +222,7 @@
 ├──────────────────────────────────────────────────────┤
 │                  Business Logic                        │
 │   ConfigManager  │  ExcelExporter  │  HtmlChartExporter │
-│   (手写JSON解析)  │  (ZIP+OOXML)    │  (Chart.js折线图)  │
+│   (手写JSON解析)  │  (ZIP+OOXML)    │  (Canvas2D自绘)    │
 │   DataBuffer     │                 │                    │
 │   (线程安全环形缓冲) │                 │                    │
 ├──────────────────────────────────────────────────────┤
@@ -249,7 +249,7 @@
 | **数据缓冲** | `src/utils/DataBuffer.cpp` | 线程安全环形缓冲区(200万行)，SRWLOCK 读写锁 |
 | **配置管理** | `src/utils/ConfigManager.cpp` | 手写递归下降 JSON 解析器 + UTF-8 文件读写 + 单例模式 |
 | **Excel 导出** | `src/utils/ExcelExporter.cpp` | 自研 ZIP writer(store) + OOXML 流式生成 / 实时增量刷新 / 多 Sheet |
-| **HTML 图表** | `src/utils/HtmlChartExporter.cpp` | 内联 HTML + Chart.js CDN 折线图 / 系统+进程多图表 / 深色主题 |
+| **HTML 图表** | `src/utils/HtmlChartExporter.cpp` | 自包含 HTML + Canvas 2D 折线图 / 框选缩放 + 坐标 tooltip / 图表过滤器 / 浅色主题 |
 | **数据模型** | `include/utils/DataModels.h` | SystemMonitorData / ProcessMonitorData / MonitorConfig 结构体 |
 | **资源文件** | `res/monitor.rc` + `res/resource.h` | 图标(IDI_MAIN_ICON)、版本信息、控件 ID 常量 |
 
@@ -262,7 +262,7 @@
 | QPC 高精度计时 | `QueryPerformanceCounter` 亚微秒级时间戳 |
 | 手写 JSON 解析器 | 配置结构简单，< 200 行代码，零依赖 |
 | 手写 ZIP + OOXML | 自研 ZIP writer(store 无压缩) + OpenXML，< 400 行 |
-| Chart.js CDN | HTML 报告中内联引用，浏览器运行时加载，交互式图表 |
+| Canvas 2D 自绘 | HTML 报告中自包含折线图，零外部依赖，浏览器直接打开，支持交互式缩放和坐标显示 |
 | `INetConnectionManager` COM | 与 ncpa.cpl 完全同源，列表一致性保证 |
 | CRITICAL_SECTION | 比 `std::mutex` 更轻量，适合高频短临界区 |
 
@@ -290,7 +290,7 @@
                      ▼              ▼
               ┌────────────┐ ┌────────────┐
               │ ExcelExport │ │ HTML Export │
-              │ (每2s刷新)   │ │ (每60s刷新) │
+              │ (每2s刷新)   │ │ (停止时生成) │
               └────────────┘ └────────────┘
 ```
 
@@ -493,10 +493,11 @@ monitor_data_20260719_143022.xlsx
 
 ### 9.2 HTML 趋势报告
 
-- **格式**：自包含单文件 HTML（Chart.js CDN 引用 + 内联 CSS/JS）
+- **格式**：自包含单文件 HTML（Canvas 2D 自绘 + 内联 CSS/JS），零外部依赖，无需联网
 - **内容**：系统 CPU / 内存 / 网络发送 / 网络接收趋势折线图 + 每个进程的 CPU / 内存 / 网络图表
-- **主题**：深色主题（背景 `#1a1a2e`），响应式布局
-- **文件名**：`monitor_report_YYYYMMDD_HHMMSS.html`
+- **交互功能**：X 轴框选缩放、点击折线显示坐标值、双击重置缩放、图表过滤器（按软件名/PID/指标类型筛选）、窗口 resize 自适应重绘
+- **主题**：浅色背景（`#f5f6fa`），白色卡片式布局，响应式设计
+- **文件名**：`monitor_data_YYYYMMDDHHmmss.html`（与 Excel 命名一致）
 
 ---
 
@@ -551,7 +552,7 @@ monitor_data_20260719_143022.xlsx
 | V3.0 | — | 架构重构（core/ui/utils 分层）、HTML 趋势报告（Chart.js 折线图）、UDP 进程监控 |
 | V3.1 | — | ncpa.cpl 同源网卡列表、已连接绿色加粗（OwnerDraw）、帮助系统完善（5 标签页） |
 | **V3.3** | 2026-07 | TCP/UDP 网络追踪修复、Excel/HTML 导出格式优化、DataBuffer 线程安全、文档完善 |
-| **V3.4** | 2026-07 | HTML 折线图 X 轴框选缩放、坐标值 tooltip 显示、版本升级 |
+| **V3.4** | 2026-07 | HTML 折线图重构为 Canvas 2D 自绘（X 轴框选缩放、点击坐标值、图表过滤器、双击重置）、HTML 文件命名与 Excel 统一、Y 轴比例自适应、X 轴 -45° 斜角标签、帮助系统完善、文档更新 |
 
 ---
 

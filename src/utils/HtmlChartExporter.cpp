@@ -313,13 +313,8 @@ std::string HtmlChartExporter::BuildHtml(
     html += ".fbtn:hover{background:#2980b9}\r\n";
     html += ".filter-info{font-size:12px;color:#b2bec3;margin-top:8px}\r\n";
     html += ".card.hidden{display:none}\r\n";
-    html += ".card.zoomed{border:2px dashed #3498db}\r\n";
-    html += ".card .reset-btn{position:absolute;top:18px;right:24px;padding:4px 12px;background:#3498db;color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer;z-index:5;display:none}\r\n";
-    html += ".card .reset-btn:hover{background:#2980b9}\r\n";
-    html += ".card.zoomed .reset-btn{display:inline-block}\r\n";
-    html += ".tip-box{position:absolute;pointer-events:none;background:rgba(44,62,80,0.92);color:#fff;padding:8px 12px;border-radius:6px;font-size:12px;line-height:1.6;white-space:nowrap;z-index:10;display:none;box-shadow:0 2px 8px rgba(0,0,0,.2)}\r\n";
-    html += ".tip-box .tip-val{font-weight:bold;color:#74b9ff}\r\n";
     html += "/* ---- Zoom & Tooltip ---- */\r\n";
+    html += ".brush-overlay{position:absolute;pointer-events:none;z-index:6;display:none;background:rgba(52,152,219,0.12);border:1.5px solid rgba(52,152,219,0.55);border-radius:2px;box-shadow:0 0 0 1px rgba(255,255,255,0.5),inset 0 0 0 1px rgba(255,255,255,0.3)}\r\n";
     html += ".zoom-reset{display:none;position:absolute;top:8px;right:16px;padding:4px 12px;border:1px solid #3498db;border-radius:4px;background:#ebf5fb;color:#3498db;font-size:12px;cursor:pointer;z-index:5}\r\n";
     html += ".zoom-reset:hover{background:#3498db;color:#fff}\r\n";
     html += ".chart-tooltip{display:none;position:fixed;z-index:999;background:rgba(44,62,80,0.92);color:#fff;padding:8px 14px;border-radius:6px;font-size:13px;line-height:1.8;pointer-events:none;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.2)}\r\n";
@@ -446,9 +441,14 @@ std::string HtmlChartExporter::BuildHtml(
         html += "\" onclick=\"window.resetZoom('c";
         html += idxBuf;
         html += "')\">↩ 重置缩放</button>\r\n";
+        html += "<div style=\"position:relative\">\r\n";
         html += "<canvas id=\"c";
         html += idxBuf;
         html += "\"></canvas>\r\n";
+        html += "<div class=\"brush-overlay\" id=\"bo_c";
+        html += idxBuf;
+        html += "\"></div>\r\n";
+        html += "</div>\r\n";
         html += "</div>\r\n";
     }
 
@@ -607,7 +607,7 @@ std::string HtmlChartExporter::BuildHtml(
     html += "});\r\n";
     html += "fInfo.textContent='显示 '+visible+' / '+total+' 个图表';\r\n";
     html += "// 延迟重绘可见图表，确保 display:block 已生效、canvas 尺寸已更新\r\n";
-    html += "setTimeout(function(){allCharts.forEach(function(cd){window.draw(cd.id,cd.labels,cd.data,cd.color,cd.yLabel);});},60);\r\n";
+    html += "setTimeout(function(){allCharts.forEach(function(cd){var c=document.getElementById(cd.id);if(!c)return;var p=c.closest('.card');if(p&&p.classList.contains('hidden'))return;window.draw(cd.id,cd.labels,cd.data,cd.color,cd.yLabel);});},60);\r\n";
     html += "}\r\n";
 
     // Clear
@@ -640,14 +640,14 @@ std::string HtmlChartExporter::BuildHtml(
     html += "c.style.width=W+'px';c.style.height=H+'px';\r\n";
     html += "var ctx=c.getContext('2d');ctx.scale(dpr,dpr);\r\n";
     html += "var n=data.length;if(n<2)return;\r\n";
-    html += "var pad={t:16,r:24,b:100,l:70};\r\n";
+    html += "var pad={t:16,r:24,b:120,l:70};\r\n";
     html += "var pw=W-pad.l-pad.r,ph=H-pad.t-pad.b;\r\n";
 
-    // Find min/max
+    // Find min/max — proportional margin, no fixed-range distortion
     html += "var ymin=1e99,ymax=-1e99;\r\n";
     html += "for(var i=0;i<n;i++){var v=data[i];if(v<ymin)ymin=v;if(v>ymax)ymax=v;}\r\n";
-    html += "if(ymax-ymin<1){var m=(ymin+ymax)/2;ymin=m-0.5;ymax=m+0.5;}\r\n";
-    html += "var margin=(ymax-ymin)*0.08;ymin-=margin;ymax+=margin;\r\n";
+    html += "var yr=ymax-ymin;if(yr<1e-6)yr=1;\r\n";
+    html += "var margin=yr*0.12;ymin-=margin;ymax+=margin;\r\n";
     html += "if(ymin<0)ymin=0;\r\n";
 
     // Background
@@ -669,20 +669,24 @@ std::string HtmlChartExporter::BuildHtml(
     html += "ctx.font='bold 14px sans-serif';ctx.fillStyle='#636e72';ctx.textAlign='center';\r\n";
     html += "ctx.fillText(yLabel,0,0);ctx.restore();\r\n";
 
-    // ---- X axis labels (rotated timestamps) ----
-    html += "var xTickCount=7;\r\n";
+    // ---- X axis line ----
+    html += "ctx.strokeStyle='#bdc3c7';ctx.lineWidth=1;\r\n";
+    html += "ctx.beginPath();ctx.moveTo(pad.l,pad.t+ph);ctx.lineTo(pad.l+pw,pad.t+ph);ctx.stroke();\r\n";
+
+    // ---- X axis labels (-45° angled, full timestamp, below axis line) ----
+    html += "var xTickCount=Math.min(8,Math.max(4,Math.ceil(n/20)));\r\n";
     html += "var xStep=Math.max(1,Math.floor(n/xTickCount));\r\n";
-    html += "ctx.font='11px sans-serif';ctx.fillStyle='#95a5a6';ctx.textAlign='right';\r\n";
+    html += "ctx.font='10px sans-serif';ctx.fillStyle='#7f8c8d';ctx.textAlign='right';\r\n";
     html += "for(var i=0;i<n;i+=xStep){\r\n";
     html += "var xp=pad.l+pw*i/(n-1);\r\n";
-    html += "ctx.save();ctx.translate(xp,pad.t+ph+4);ctx.rotate(-Math.PI/2);\r\n";
+    html += "ctx.save();ctx.translate(xp,pad.t+ph+10);ctx.rotate(-Math.PI/4);\r\n";
     html += "ctx.fillText(labels[i],0,0);\r\n";
     html += "ctx.restore();\r\n";
     html += "}\r\n";
 
-    // ---- X axis title ----
-    html += "ctx.font='14px sans-serif';ctx.fillStyle='#636e72';ctx.textAlign='center';\r\n";
-    html += "ctx.fillText('时间',pad.l+pw/2,H-4);\r\n";
+    // ---- X axis title (horizontal, below all labels) ----
+    html += "ctx.font='bold 13px sans-serif';ctx.fillStyle='#636e72';ctx.textAlign='center';\r\n";
+    html += "ctx.fillText('时间',pad.l+pw/2,H-6);\r\n";
 
     // ---- Data line + area fill ----
     html += "ctx.strokeStyle=color;ctx.lineWidth=2.5;ctx.lineJoin='round';\r\n";
@@ -746,53 +750,91 @@ std::string HtmlChartExporter::BuildHtml(
     html += "var brush={on:false,c:null,sx:0,cx:0,si:0,ei:0,cd:null};\r\n";
     html += "function gpos(c,ev){var r=c.getBoundingClientRect();return{x:ev.clientX-r.left,y:ev.clientY-r.top};}\r\n";
     html += "function fidx(mx,g){return Math.max(0,Math.min(g.n-1,Math.round((mx-g.pad.l)/g.pw*(g.n-1))));}\r\n";
+
+    // Bind events to each chart
     html += "chartDefs.forEach(function(cd){\r\n";
     html += "var c=document.getElementById(cd.id);if(!c)return;\r\n";
+    html += "var bo=document.getElementById('bo_'+cd.id);\r\n";
+
+    // mousedown: start brush
     html += "c.addEventListener('mousedown',function(ev){\r\n";
     html += "if(!c._geo)return;var p=gpos(c,ev);var g=c._geo;\r\n";
     html += "if(p.x<g.pad.l||p.x>g.pad.l+g.pw||p.y<g.pad.t||p.y>g.pad.t+g.ph)return;\r\n";
-    html += "brush.on=true;brush.c=c;brush.sx=p.x;brush.cx=p.x;brush.cd=cd;brush.si=fidx(p.x,g);ev.preventDefault();\r\n";
+    html += "tipBox.style.display='none';brush.on=true;brush.c=c;brush.sx=p.x;brush.cx=p.x;brush.cd=cd;\r\n";
+    html += "brush.si=fidx(p.x,g);brush.ei=brush.si;ev.preventDefault();\r\n";
     html += "});\r\n";
+
+    // mousemove: update brush overlay div (NO canvas redraw!)
     html += "c.addEventListener('mousemove',function(ev){\r\n";
-    html += "if(!brush.on||brush.cd!==cd)return;var g=brush.c._geo;var p=gpos(brush.c,ev);\r\n";
-    html += "brush.cx=Math.max(g.pad.l,Math.min(g.pad.l+g.pw,p.x));brush.ei=fidx(brush.cx,g);\r\n";
+    html += "if(!brush.on||brush.cd!==cd)return;\r\n";
+    html += "var g=brush.c._geo;var p=gpos(brush.c,ev);\r\n";
+    html += "brush.cx=Math.max(g.pad.l,Math.min(g.pad.l+g.pw,p.x));\r\n";
+    html += "brush.ei=fidx(brush.cx,g);\r\n";
     html += "var x1=Math.min(brush.sx,brush.cx),x2=Math.max(brush.sx,brush.cx);\r\n";
-    html += "draw(cd.id,cd.labels,cd.data,cd.color,cd.yLabel);\r\n";
-    html += "var ctx=brush.c.getContext('2d');var dpr=window.devicePixelRatio||1;\r\n";
-    html += "ctx.save();ctx.setTransform(dpr,0,0,dpr,0,0);\r\n";
-    html += "ctx.fillStyle='rgba(52,152,219,0.18)';ctx.strokeStyle='rgba(52,152,219,0.7)';ctx.lineWidth=1.5;\r\n";
-    html += "ctx.fillRect(x1,g.pad.t,x2-x1,g.ph);ctx.strokeRect(x1,g.pad.t,x2-x1,g.ph);ctx.restore();\r\n";
+    html += "bo.style.left=x1+'px';bo.style.top=g.pad.t+'px';\r\n";
+    html += "bo.style.width=(x2-x1)+'px';bo.style.height=g.ph+'px';\r\n";
+    html += "bo.style.display='block';\r\n";
     html += "});\r\n";
+
+    // mouseup: complete brush zoom or show tooltip
     html += "c.addEventListener('mouseup',function(ev){\r\n";
-    html += "if(!brush.on)return;var g=brush.c._geo;var dx=Math.abs(brush.cx-brush.sx);brush.on=false;\r\n";
-    html += "if(dx<5){var idx=fidx(brush.sx,g);showTip(ev,cd,g,idx);}\r\n";
-    html += "else{var i1=Math.min(brush.si,brush.ei),i2=Math.max(brush.si,brush.ei);if(i2-i1>=2)doZoom(cd,i1,i2);else draw(cd.id,cd.labels,cd.data,cd.color,cd.yLabel);}\r\n";
+    html += "if(!brush.on)return;\r\n";
+    html += "var g=brush.c._geo;var dx=Math.abs(brush.cx-brush.sx);\r\n";
+    html += "bo.style.display='none';brush.on=false;\r\n";
+    html += "if(dx<5){\r\n";
+    // Click → show tooltip at nearest point (no dot!)
+    html += "var idx=fidx(brush.sx,g);\r\n";
+    html += "var lbl=g.labels[idx];var val=g.data[idx].toFixed(2);\r\n";
+    html += "tipBox.innerHTML='<b>'+lbl+'</b><br>'+g.yLabel+': <b>'+val+'</b>';\r\n";
+    html += "var cx=ev.clientX,cy=ev.clientY;\r\n";
+    html += "tipBox.style.display='block';tipBox.style.left='';tipBox.style.top='';\r\n";
+    // Read size after display:block
+    html += "var tw=tipBox.offsetWidth,th=tipBox.offsetHeight;\r\n";
+    html += "var tx=cx+14,ty=cy-th-10;\r\n";
+    html += "if(tx+tw>window.innerWidth-8)tx=cx-tw-14;\r\n";
+    html += "if(ty<8)ty=cy+14;\r\n";
+    html += "tipBox.style.left=tx+'px';tipBox.style.top=ty+'px';\r\n";
+    html += "clearTimeout(tipBox._t);tipBox._t=setTimeout(function(){tipBox.style.display='none';},4000);\r\n";
+    html += "draw(cd.id,cd.labels,cd.data,cd.color,cd.yLabel);\r\n";
+    html += "}else{\r\n";
+    // Brush → apply zoom
+    html += "var i1=Math.min(brush.si,brush.ei),i2=Math.max(brush.si,brush.ei);\r\n";
+    html += "if(i2-i1>=2)doZoom(cd,i1,i2);\r\n";
+    html += "}\r\n";
     html += "});\r\n";
-    html += "c.addEventListener('mouseleave',function(ev){if(brush.on&&brush.cd===cd){brush.on=false;draw(cd.id,cd.labels,cd.data,cd.color,cd.yLabel);}});\r\n";
+
+    // mouseleave: cancel brush
+    html += "c.addEventListener('mouseleave',function(ev){\r\n";
+    html += "if(brush.on&&brush.cd===cd){bo.style.display='none';brush.on=false;}\r\n";
+    html += "});\r\n";
+
+    // double-click: reset zoom
     html += "c.addEventListener('dblclick',function(ev){window.resetZoom(cd.id);});\r\n";
     html += "});\r\n";
+
+    // doZoom: slice data and redraw (handles multi-level zoom via offset tracking)
     html += "function doZoom(cd,i1,i2){\r\n";
-    html += "if(!cd.fullLabels){cd.fullLabels=cd.labels.slice();cd.fullData=cd.data.slice();}\r\n";
-    html += "cd.labels=cd.fullLabels.slice(i1,i2+1);cd.data=cd.fullData.slice(i1,i2+1);cd.zoomed=true;\r\n";
-    html += "var card=document.getElementById(cd.id).closest('.card');if(card)card.classList.add('zoomed');\r\n";
+    html += "if(!cd.fullLabels){cd.fullLabels=cd.labels.slice();cd.fullData=cd.data.slice();cd._off=0;}\r\n";
+    html += "var off=cd._off||0;\r\n";
+    html += "var fi1=off+i1,fi2=off+i2;\r\n";
+    html += "cd.labels=cd.fullLabels.slice(fi1,fi2+1);cd.data=cd.fullData.slice(fi1,fi2+1);\r\n";
+    html += "cd._off=fi1;cd.zoomed=true;\r\n";
+    html += "var rz=document.getElementById('rz_'+cd.id);if(rz)rz.style.display='inline-block';\r\n";
     html += "draw(cd.id,cd.labels,cd.data,cd.color,cd.yLabel);}\r\n";
+
+    // resetZoom
     html += "window.resetZoom=function(cid){\r\n";
     html += "var cd=null;for(var i=0;i<allCharts.length;i++){if(allCharts[i].id===cid){cd=allCharts[i];break;}}\r\n";
-    html += "if(!cd||!cd.zoomed)return;cd.labels=cd.fullLabels.slice();cd.data=cd.fullData.slice();cd.zoomed=false;\r\n";
-    html += "var card=document.getElementById(cid).closest('.card');if(card)card.classList.remove('zoomed');\r\n";
+    html += "if(!cd||!cd.zoomed)return;cd.labels=cd.fullLabels.slice();cd.data=cd.fullData.slice();cd.zoomed=false;cd._off=0;\r\n";
+    html += "var rz=document.getElementById('rz_'+cid);if(rz)rz.style.display='none';\r\n";
     html += "draw(cd.id,cd.labels,cd.data,cd.color,cd.yLabel);}\r\n";
-    html += "function showTip(ev,cd,geo,idx){\r\n";
-    html += "var xp=geo.pad.l+geo.pw*idx/(geo.n-1);var yp=geo.pad.t+geo.ph*(1-(geo.data[idx]-geo.ymin)/(geo.ymax-geo.ymin));\r\n";
-    html += "var lab=geo.labels[idx];var val=geo.data[idx].toFixed(2);\r\n";
-    html += "tipBox.innerHTML='<div>'+lab+'</div><div class=tip-val>'+val+'</div>';tipBox.style.display='block';\r\n";
-    html += "var c=document.getElementById(cd.id);var cr=c.getBoundingClientRect();\r\n";
-    html += "var tx=cr.left+xp,ty=cr.top+yp-48;if(ty<cr.top)ty=cr.top+yp+16;if(tx+110>cr.right)tx=cr.right-110;\r\n";
-    html += "tipBox.style.left=tx+'px';tipBox.style.top=ty+'px';clearTimeout(tipBox._t);tipBox._t=setTimeout(function(){tipBox.style.display='none';},3000);\r\n";
-    html += "var ctx=c.getContext('2d');var dpr=window.devicePixelRatio||1;ctx.save();ctx.setTransform(dpr,0,0,dpr,0,0);\r\n";
-    html += "ctx.fillStyle=geo.color;ctx.beginPath();ctx.arc(xp,yp,5,0,Math.PI*2);ctx.fill();\r\n";
-    html += "ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(xp,yp,2.5,0,Math.PI*2);ctx.fill();ctx.restore();}\r\n";
+
+    // Hide tooltip on outside click or scroll
+    html += "document.addEventListener('click',function(ev){if(!ev.target.closest('canvas'))tipBox.style.display='none';});\r\n";
     html += "window.addEventListener('scroll',function(){tipBox.style.display='none';},{passive:true});\r\n";
-    html += "var rtimer=null;window.addEventListener('resize',function(){clearTimeout(rtimer);rtimer=setTimeout(function(){allCharts.forEach(function(cd){var c=document.getElementById(cd.id);if(!c)return;var p=c.closest('.card');if(p&&p.classList.contains('hidden'))return;draw(cd.id,cd.labels,cd.data,cd.color,cd.yLabel);});},150);});\r\n";
+
+    // Resize → redraw all visible charts
+    html += "var rtimer=null;window.addEventListener('resize',function(){clearTimeout(rtimer);rtimer=setTimeout(function(){allCharts.forEach(function(cd){var c=document.getElementById(cd.id);if(!c)return;var p=c.closest('.card');if(p&&p.classList.contains('hidden'))return;draw(cd.id,cd.labels,cd.data,cd.color,cd.yLabel);});},200);});\r\n";
     html += "})();\r\n";
     html += "</script>\r\n</body>\r\n</html>";
 

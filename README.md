@@ -40,7 +40,7 @@
 | **进程网络** | TCP `GetPerTcpConnectionEStats` 精确到字节 + UDP 系统级按端点比例分配，IPv4/IPv6 双栈 |
 | **多进程并行** | 同名多进程按 PID 独立采集，独立 Tab 页签展示 |
 | **Excel 导出** | 监测中每 2 秒实时写入（防崩溃丢失），停止时最终保存，系统+进程分 Sheet，类型化单元格 |
-| **HTML 报告** | Chart.js 深色主题折线图，CPU/内存/网络趋势一览 |
+| **HTML 报告** | Canvas 2D 自绘折线图，X 轴框选缩放、点击显示坐标值，自包含无需联网 |
 | **配置持久化** | JSON 配置文件（UTF-8），所有设置完整保存，启动自动加载 |
 | **帮助系统** | 5 页签帮助对话框（软件简介 / 功能说明 / 使用方法 / 使用窍门 / 注意事项） |
 | **窗口置顶** | 按钮切换，方便实时观察 |
@@ -73,7 +73,7 @@
 | 手写递归下降解析器 | JSON 配置读写 | ~200 行 |
 | 自研 ZIP writer (store) | XLSX 容器打包 | ~150 行 |
 | 手写 OOXML 流式生成 | Excel 工作表 XML | ~400 行 |
-| Chart.js CDN 引用 | HTML 趋势折线图 | ~600 行 |
+| Canvas 2D 自绘 | HTML 趋势折线图 | ~600 行 |
 
 ### 系统 API 依赖
 
@@ -174,7 +174,7 @@ MonitorTool3.0/
 │       ├── DataBuffer.cpp             # 环形缓冲区实现（SRWLOCK 读写锁）
 │       ├── ConfigManager.cpp          # 手写 JSON 解析器 + UTF-8 文件读写
 │       ├── ExcelExporter.cpp          # ZIP store + OOXML 流式生成 + 实时增量刷新
-│       └── HtmlChartExporter.cpp      # Chart.js 内联 HTML + 深色主题报告
+│       └── HtmlChartExporter.cpp      # Canvas 2D 自绘 HTML + 交互式趋势报告
 │
 └── doc/
     ├── PRD.md                         # 产品需求文档
@@ -195,7 +195,7 @@ MonitorTool3.0/
 ├──────────────────────────────────────────────────────┤
 │                  Business Logic                        │
 │   ConfigManager (手写JSON解析)  │  ExcelExporter (ZIP+OOXML) │
-│   DataBuffer (线程安全环形缓冲)   │  HtmlChartExporter (Chart.js) │
+│   DataBuffer (线程安全环形缓冲)   │  HtmlChartExporter (Canvas 2D) │
 ├──────────────────────────────────────────────────────┤
 │                Data Collection Layer                   │
 │   SystemMonitor  │  ProcessMonitor  │ NetSpeedMonitor  │
@@ -299,10 +299,11 @@ else
 
 ### HtmlChartExporter — HTML 报告
 
-- **图表库**：Chart.js CDN（运行时浏览器加载）
-- **主题**：深色背景（`#1a1a2e`），响应式布局
+- **绘制方式**：Canvas 2D 自绘，零外部依赖，无需联网加载
+- **主题**：浅色背景（`#f5f6fa`），响应式布局
 - **内容**：系统 CPU/内存/网络 + 每进程 CPU/内存/网络 折线图
-- **文件命名**：`monitor_report_YYYYMMDD_HHMMSS.html`
+- **交互功能**：X 轴框选缩放、点击折线显示坐标值、图表过滤器（软件名/PID/指标类型）
+- **文件命名**：`monitor_data_YYYYMMDDHHmmss.html`
 
 ### ConfigManager — 配置管理
 
@@ -433,7 +434,7 @@ else
 
 ### Q7：HTML 报告图表不显示
 
-HTML 使用 Chart.js，需现代浏览器（Chrome/Firefox/Edge）且需**联网加载 CDN**。
+HTML 使用自包含 Canvas 2D 绘制，无需联网。直接用浏览器（Chrome/Firefox/Edge）打开即可查看。
 
 ### Q8：网卡列表与实际不符
 

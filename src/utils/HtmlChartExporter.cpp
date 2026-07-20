@@ -313,18 +313,12 @@ std::string HtmlChartExporter::BuildHtml(
     html += ".fbtn:hover{background:#2980b9}\r\n";
     html += ".filter-info{font-size:12px;color:#b2bec3;margin-top:8px}\r\n";
     html += ".card.hidden{display:none}\r\n";
-    html += ".card.zoomed{border:2px dashed #3498db}
-";
-    html += ".card .reset-btn{position:absolute;top:18px;right:24px;padding:4px 12px;background:#3498db;color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer;z-index:5;display:none}
-";
-    html += ".card .reset-btn:hover{background:#2980b9}
-";
-    html += ".card.zoomed .reset-btn{display:inline-block}
-";
-    html += ".tip-box{position:absolute;pointer-events:none;background:rgba(44,62,80,0.92);color:#fff;padding:8px 12px;border-radius:6px;font-size:12px;line-height:1.6;white-space:nowrap;z-index:10;display:none;box-shadow:0 2px 8px rgba(0,0,0,.2)}
-";
-    html += ".tip-box .tip-val{font-weight:bold;color:#74b9ff}
-";
+    html += ".card.zoomed{border:2px dashed #3498db}\r\n";
+    html += ".card .reset-btn{position:absolute;top:18px;right:24px;padding:4px 12px;background:#3498db;color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer;z-index:5;display:none}\r\n";
+    html += ".card .reset-btn:hover{background:#2980b9}\r\n";
+    html += ".card.zoomed .reset-btn{display:inline-block}\r\n";
+    html += ".tip-box{position:absolute;pointer-events:none;background:rgba(44,62,80,0.92);color:#fff;padding:8px 12px;border-radius:6px;font-size:12px;line-height:1.6;white-space:nowrap;z-index:10;display:none;box-shadow:0 2px 8px rgba(0,0,0,.2)}\r\n";
+    html += ".tip-box .tip-val{font-weight:bold;color:#74b9ff}\r\n";
     html += "/* ---- Zoom & Tooltip ---- */\r\n";
     html += ".zoom-reset{display:none;position:absolute;top:8px;right:16px;padding:4px 12px;border:1px solid #3498db;border-radius:4px;background:#ebf5fb;color:#3498db;font-size:12px;cursor:pointer;z-index:5}\r\n";
     html += ".zoom-reset:hover{background:#3498db;color:#fff}\r\n";
@@ -374,6 +368,7 @@ std::string HtmlChartExporter::BuildHtml(
     }
     html += "<div class=\"header\">\r\n";
     html += "<h1>资源监测趋势报告</h1>\r\n";
+    html += "<div style=\"font-size:13px;color:#3498db;margin-bottom:6px\">工具: 挂机电脑资源监测软件 V3.4</div>\r\n";
     html += "<div class=\"time\">监测开始: ";
     html += EscapeHtml(fileTimeLabel);
     html += "  →  结束: ";
@@ -414,8 +409,7 @@ std::string HtmlChartExporter::BuildHtml(
     html += "<div class=\"filter-info\" id=\"fInfo\"></div>\r\n";
     html += "</div>\r\n";
 
-    html += "<div class=\"tip-box\" id=\"tipBox\"></div>
-";
+    html += "<div class=\"tip-box\" id=\"tipBox\"></div>\r\n";
 
     html += "<div class=\"charts\">\r\n";
 
@@ -439,22 +433,20 @@ std::string HtmlChartExporter::BuildHtml(
         html += "\" data-peak=\"";
         html += peakBuf;
         html += "\">\r\n";
-        html += "<button class=\"reset-btn\" type=\"button\">↺ 重置</button>
-";
         html += "<h2>";
         html += EscapeHtml(cd.title);
         html += "</h2>\r\n";
         html += "<div class=\"sub\">";
         html += EscapeHtml(cd.subtitle);
         html += "</div>\r\n";
+        char idxBuf[16];
+        snprintf(idxBuf, sizeof(idxBuf), "%zu", ci);
         html += "<button class=\"zoom-reset\" id=\"rz_c";
         html += idxBuf;
         html += "\" onclick=\"window.resetZoom('c";
         html += idxBuf;
         html += "')\">↩ 重置缩放</button>\r\n";
         html += "<canvas id=\"c";
-        char idxBuf[16];
-        snprintf(idxBuf, sizeof(idxBuf), "%zu", ci);
         html += idxBuf;
         html += "\"></canvas>\r\n";
         html += "</div>\r\n";
@@ -706,6 +698,7 @@ std::string HtmlChartExporter::BuildHtml(
     html += "ctx.lineTo(pad.l,pad.t+ph);ctx.closePath();ctx.fill();\r\n";
     html += "ctx.globalAlpha=1;\r\n";
 
+    html += "c._geo={pad:pad,pw:pw,ph:ph,ymin:ymin,ymax:ymax,n:n,labels:labels,data:data,color:color,yLabel:yLabel};\r\n";
     html += "}\r\n";
     html += "window.draw=draw;\r\n";  // expose for filter redraw
 
@@ -740,13 +733,66 @@ std::string HtmlChartExporter::BuildHtml(
         html += colors[ci % nColors];
         html += "',yLabel:'";
         html += EscapeHtml(cd.yLabel);
-        html += "'}\r\n";
+        html += "',fullLabels:null,fullData:null,zoomed:false}\r\n";
     }
     html += "];\r\n";
     // Draw all charts initially
+    html += "chartDefs.forEach(function(cd){cd.fullLabels=cd.labels.slice();cd.fullData=cd.data.slice();cd.zoomed=false;});\r\n";
     html += "chartDefs.forEach(function(cd){draw(cd.id,cd.labels,cd.data,cd.color,cd.yLabel);});\r\n";
-    html += "allCharts=chartDefs;\r\n";  // alias for filter redraw
+    html += "allCharts=chartDefs;\r\n";
 
+    // === Brush Zoom + Click Tooltip (V3.4) ===
+    html += "var tipBox=document.getElementById('chartTip');\r\n";
+    html += "var brush={on:false,c:null,sx:0,cx:0,si:0,ei:0,cd:null};\r\n";
+    html += "function gpos(c,ev){var r=c.getBoundingClientRect();return{x:ev.clientX-r.left,y:ev.clientY-r.top};}\r\n";
+    html += "function fidx(mx,g){return Math.max(0,Math.min(g.n-1,Math.round((mx-g.pad.l)/g.pw*(g.n-1))));}\r\n";
+    html += "chartDefs.forEach(function(cd){\r\n";
+    html += "var c=document.getElementById(cd.id);if(!c)return;\r\n";
+    html += "c.addEventListener('mousedown',function(ev){\r\n";
+    html += "if(!c._geo)return;var p=gpos(c,ev);var g=c._geo;\r\n";
+    html += "if(p.x<g.pad.l||p.x>g.pad.l+g.pw||p.y<g.pad.t||p.y>g.pad.t+g.ph)return;\r\n";
+    html += "brush.on=true;brush.c=c;brush.sx=p.x;brush.cx=p.x;brush.cd=cd;brush.si=fidx(p.x,g);ev.preventDefault();\r\n";
+    html += "});\r\n";
+    html += "c.addEventListener('mousemove',function(ev){\r\n";
+    html += "if(!brush.on||brush.cd!==cd)return;var g=brush.c._geo;var p=gpos(brush.c,ev);\r\n";
+    html += "brush.cx=Math.max(g.pad.l,Math.min(g.pad.l+g.pw,p.x));brush.ei=fidx(brush.cx,g);\r\n";
+    html += "var x1=Math.min(brush.sx,brush.cx),x2=Math.max(brush.sx,brush.cx);\r\n";
+    html += "draw(cd.id,cd.labels,cd.data,cd.color,cd.yLabel);\r\n";
+    html += "var ctx=brush.c.getContext('2d');var dpr=window.devicePixelRatio||1;\r\n";
+    html += "ctx.save();ctx.setTransform(dpr,0,0,dpr,0,0);\r\n";
+    html += "ctx.fillStyle='rgba(52,152,219,0.18)';ctx.strokeStyle='rgba(52,152,219,0.7)';ctx.lineWidth=1.5;\r\n";
+    html += "ctx.fillRect(x1,g.pad.t,x2-x1,g.ph);ctx.strokeRect(x1,g.pad.t,x2-x1,g.ph);ctx.restore();\r\n";
+    html += "});\r\n";
+    html += "c.addEventListener('mouseup',function(ev){\r\n";
+    html += "if(!brush.on)return;var g=brush.c._geo;var dx=Math.abs(brush.cx-brush.sx);brush.on=false;\r\n";
+    html += "if(dx<5){var idx=fidx(brush.sx,g);showTip(ev,cd,g,idx);}\r\n";
+    html += "else{var i1=Math.min(brush.si,brush.ei),i2=Math.max(brush.si,brush.ei);if(i2-i1>=2)doZoom(cd,i1,i2);else draw(cd.id,cd.labels,cd.data,cd.color,cd.yLabel);}\r\n";
+    html += "});\r\n";
+    html += "c.addEventListener('mouseleave',function(ev){if(brush.on&&brush.cd===cd){brush.on=false;draw(cd.id,cd.labels,cd.data,cd.color,cd.yLabel);}});\r\n";
+    html += "c.addEventListener('dblclick',function(ev){window.resetZoom(cd.id);});\r\n";
+    html += "});\r\n";
+    html += "function doZoom(cd,i1,i2){\r\n";
+    html += "if(!cd.fullLabels){cd.fullLabels=cd.labels.slice();cd.fullData=cd.data.slice();}\r\n";
+    html += "cd.labels=cd.fullLabels.slice(i1,i2+1);cd.data=cd.fullData.slice(i1,i2+1);cd.zoomed=true;\r\n";
+    html += "var card=document.getElementById(cd.id).closest('.card');if(card)card.classList.add('zoomed');\r\n";
+    html += "draw(cd.id,cd.labels,cd.data,cd.color,cd.yLabel);}\r\n";
+    html += "window.resetZoom=function(cid){\r\n";
+    html += "var cd=null;for(var i=0;i<allCharts.length;i++){if(allCharts[i].id===cid){cd=allCharts[i];break;}}\r\n";
+    html += "if(!cd||!cd.zoomed)return;cd.labels=cd.fullLabels.slice();cd.data=cd.fullData.slice();cd.zoomed=false;\r\n";
+    html += "var card=document.getElementById(cid).closest('.card');if(card)card.classList.remove('zoomed');\r\n";
+    html += "draw(cd.id,cd.labels,cd.data,cd.color,cd.yLabel);}\r\n";
+    html += "function showTip(ev,cd,geo,idx){\r\n";
+    html += "var xp=geo.pad.l+geo.pw*idx/(geo.n-1);var yp=geo.pad.t+geo.ph*(1-(geo.data[idx]-geo.ymin)/(geo.ymax-geo.ymin));\r\n";
+    html += "var lab=geo.labels[idx];var val=geo.data[idx].toFixed(2);\r\n";
+    html += "tipBox.innerHTML='<div>'+lab+'</div><div class=tip-val>'+val+'</div>';tipBox.style.display='block';\r\n";
+    html += "var c=document.getElementById(cd.id);var cr=c.getBoundingClientRect();\r\n";
+    html += "var tx=cr.left+xp,ty=cr.top+yp-48;if(ty<cr.top)ty=cr.top+yp+16;if(tx+110>cr.right)tx=cr.right-110;\r\n";
+    html += "tipBox.style.left=tx+'px';tipBox.style.top=ty+'px';clearTimeout(tipBox._t);tipBox._t=setTimeout(function(){tipBox.style.display='none';},3000);\r\n";
+    html += "var ctx=c.getContext('2d');var dpr=window.devicePixelRatio||1;ctx.save();ctx.setTransform(dpr,0,0,dpr,0,0);\r\n";
+    html += "ctx.fillStyle=geo.color;ctx.beginPath();ctx.arc(xp,yp,5,0,Math.PI*2);ctx.fill();\r\n";
+    html += "ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(xp,yp,2.5,0,Math.PI*2);ctx.fill();ctx.restore();}\r\n";
+    html += "window.addEventListener('scroll',function(){tipBox.style.display='none';},{passive:true});\r\n";
+    html += "var rtimer=null;window.addEventListener('resize',function(){clearTimeout(rtimer);rtimer=setTimeout(function(){allCharts.forEach(function(cd){var c=document.getElementById(cd.id);if(!c)return;var p=c.closest('.card');if(p&&p.classList.contains('hidden'))return;draw(cd.id,cd.labels,cd.data,cd.color,cd.yLabel);});},150);});\r\n";
     html += "})();\r\n";
     html += "</script>\r\n</body>\r\n</html>";
 
@@ -771,7 +817,7 @@ std::wstring HtmlChartExporter::Export(
     wchar_t timestamp[32];
     wcsftime(timestamp, 32, L"%Y%m%d%H%M%S", &tm_start);
     wchar_t filePath[MAX_PATH];
-    swprintf_s(filePath, MAX_PATH, L"%s\\挂机电脑资源监测软件V3.4_%s.html", outputDir, timestamp);
+    swprintf_s(filePath, MAX_PATH, L"%s\\monitor_data_%s.html", outputDir, timestamp);
 
     HANDLE hFile = CreateFileW(filePath, GENERIC_WRITE, 0, nullptr,
                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);

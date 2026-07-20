@@ -220,7 +220,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                         procs.push_back(mp);
                         procData.push_back(s->dataBuffer.GetProcessDataCopy(pm->GetProcessName()));
                     }
-                    s->excelExporter.FlushExport(sysCopy, procs, procData, cfg.netUnit);
+                    s->excelExporter.FlushExport(sysCopy, procs, procData, cfg.netUnit, cfg.netInterface);
                     s->isFlushing = false;
                 }
             }
@@ -238,7 +238,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                     procs2.push_back(mp);
                     procData2.push_back(s->dataBuffer.GetProcessDataCopy(pm->GetProcessName()));
                 }
-                HtmlChartExporter::Export(reportCfg.outputDir, s->monitorStartTime, sysCopy2, procs2, procData2);
+                HtmlChartExporter::Export(reportCfg.outputDir, s->monitorStartTime, sysCopy2, procs2, procData2, reportCfg.netInterface);
             }
         }
         return 0;
@@ -576,8 +576,13 @@ bool InitMainWindow(HWND hWnd, MainWindowState* s) {
     RefreshProcessList(s);
     RebuildProcessTabs(s);
 
-    // Initialize system monitor baseline
-    s->systemMonitor.Initialize();
+    // Initialize system monitor baseline — SetNetInterface before Initialize()
+    {
+        auto& netCfg = ConfigManager::Instance().GetConfig();
+        s->systemMonitor.SetNetUnit(netCfg.netUnit);
+        s->systemMonitor.SetNetInterface(netCfg.netInterface);
+        s->systemMonitor.Initialize();
+    }
 
     return true;
 }
@@ -1255,13 +1260,14 @@ void StartMonitoring(MainWindowState* s) {
     s->lastFlushSystemIndex = 0;
     s->lastFlushTick = 0;
 
-    // Start ETW-based per-process network monitor (requires admin)
+    // Start per-process network monitor
     if (!s->netSpeedMonitor.Start()) {
         OutputDebugStringW(L"[MainWindow] NetSpeedMonitor failed — process network will be 0\r\n");
     }
 
     // Begin real-time Excel export (file locked, read-only for external viewers)
     s->excelExporter.SetNetUnit(cfg.netUnit);
+    s->excelExporter.SetNetInterface(cfg.netInterface);
     s->excelExporter.BeginExport(cfg.outputDir, s->monitorStartTime);
 
     // Create stop event
@@ -1327,7 +1333,7 @@ void StopMonitoring(MainWindowState* s) {
             procs.push_back(mp);
             procData.push_back(s->dataBuffer.GetProcessDataCopy(pm->GetProcessName()));
         }
-        s->excelExporter.FlushExport(sysCopy, procs, procData, cfg.netUnit);
+        s->excelExporter.FlushExport(sysCopy, procs, procData, cfg.netUnit, cfg.netInterface);
     }
     s->excelExporter.EndExport();
 
@@ -1345,7 +1351,7 @@ void StopMonitoring(MainWindowState* s) {
             procs2.push_back(mp);
             procData2.push_back(s->dataBuffer.GetProcessDataCopy(pm->GetProcessName()));
         }
-        htmlPath = HtmlChartExporter::Export(reportCfg.outputDir, s->monitorStartTime, sysCopy2, procs2, procData2);
+        htmlPath = HtmlChartExporter::Export(reportCfg.outputDir, s->monitorStartTime, sysCopy2, procs2, procData2, reportCfg.netInterface);
     }
 
     {
@@ -1378,21 +1384,57 @@ DWORD WINAPI MonitorThreadProc(LPVOID param) {
     auto& cfg = ConfigManager::Instance().GetConfig();
     int samplePeriod = cfg.samplePeriod;
 
+    // Warm-up: call Collect() once for each process monitor to establish
+    // CPU baselines (cpuInitialized), elapsed-time baseline, and NetSpeedMonitor
+    // TCP ESTATS baselines. Results are discarded.
+    // Must run BEFORE the initial sleep so the first real collection has a
+    // full samplePeriod of delta to work with.
+    {
+        double warmRunSec = (double)time(nullptr) - s->monitorStartTime;
+        for (size_t i = 0; i < s->processMonitors.size(); i++) {
+            s->processMonitors[i]->Collect(warmRunSec, &s->netSpeedMonitor);
+        }
+    }
+
+    // Wait one sample period so baselines (both SystemMonitor::Initialize
+    // and the process warm-up above) can accumulate meaningful deltas.
+    // This avoids CPU/net being 0 on the first row.
+    if (WaitForSingleObject(s->hStopEvent, samplePeriod * 1000) == WAIT_OBJECT_0)
+        return 0;
+
     while (WaitForSingleObject(s->hStopEvent, 0) == WAIT_TIMEOUT) {
         DWORD iterStart = GetTickCount();
 
         double runSeconds = (double)time(nullptr) - s->monitorStartTime;
 
-        // Collect system data
+        // Collect system data (has NIC-filtered AND total network speeds)
+        SystemMonitorData sysData = {};
         if (cfg.monitorCpu || cfg.monitorMemory || cfg.monitorNetwork) {
-            SystemMonitorData sysData = s->systemMonitor.Collect(runSeconds);
+            sysData = s->systemMonitor.Collect(runSeconds);
             s->dataBuffer.AddSystemData(sysData);
+        }
+
+        // Calculate NIC ratio for scaling per-process network data.
+        // When a specific NIC is selected, per-process speeds are scaled by
+        // (NIC traffic / total traffic).  For a disconnected NIC this ratio
+        // is 0, so process network correctly shows 0.
+        double nicSendRatio = 1.0, nicRecvRatio = 1.0;
+        if (wcscmp(cfg.netInterface, L"全部") != 0) {
+            double totalSend = s->systemMonitor.GetTotalNetSendSpeed();
+            double totalRecv = s->systemMonitor.GetTotalNetRecvSpeed();
+            if (totalSend > 0.0001)
+                nicSendRatio = sysData.netSendSpeed / totalSend;
+            if (totalRecv > 0.0001)
+                nicRecvRatio = sysData.netRecvSpeed / totalRecv;
         }
 
         // Collect process data (one entry per PID for same-name processes)
         for (size_t i = 0; i < s->processMonitors.size(); i++) {
             auto procDataList = s->processMonitors[i]->Collect(runSeconds, &s->netSpeedMonitor);
             for (auto& procData : procDataList) {
+                // Scale per-process network by NIC ratio
+                procData.netSendSpeed *= nicSendRatio;
+                procData.netRecvSpeed *= nicRecvRatio;
                 s->dataBuffer.AddProcessData(s->processMonitors[i]->GetProcessName(), procData);
             }
         }
@@ -1418,7 +1460,9 @@ void UpdateDisplay(MainWindowState* s) {
 }
 
 void UpdateSystemListView(MainWindowState* s) {
-    const auto& sysData = s->dataBuffer.GetSystemDataRef();
+    // Use thread-safe copy instead of raw reference to avoid data race
+    // with the monitor thread which concurrently calls AddSystemData()
+    auto sysData = s->dataBuffer.GetSystemDataCopy();
     int totalCount = (int)sysData.size();
 
     // Use actual ListView item count + display offset to find new items.
@@ -1480,10 +1524,12 @@ void UpdateSystemListView(MainWindowState* s) {
 }
 
 void UpdateProcessListView(MainWindowState* s, ProcessTabInfo& tab) {
-    const auto* procData = s->dataBuffer.GetProcessDataRef(tab.processName);
-    if (!procData) return;
+    // Use thread-safe copy instead of raw pointer to avoid data race
+    // with the monitor thread which concurrently calls AddProcessData()
+    auto procData = s->dataBuffer.GetProcessDataCopy(tab.processName);
+    if (procData.empty()) return;
 
-    int totalCount = (int)procData->size();
+    int totalCount = (int)procData.size();
     int startIdx = tab.lastDataIdx + 1;
     if (startIdx >= totalCount) return;
 
@@ -1493,7 +1539,7 @@ void UpdateProcessListView(MainWindowState* s, ProcessTabInfo& tab) {
     int maxIdx = tab.lastDataIdx;
 
     for (int i = startIdx; i < totalCount; i++) {
-        double rs = (*procData)[i].runSeconds;
+        double rs = procData[i].runSeconds;
         if (groups.empty() || fabs(groups.back().runSeconds - rs) > 0.001) {
             groups.push_back({rs, {}});
         }
@@ -1505,8 +1551,8 @@ void UpdateProcessListView(MainWindowState* s, ProcessTabInfo& tab) {
     for (auto& group : groups) {
         if ((int)group.indices.size() > 5) {
             std::sort(group.indices.begin(), group.indices.end(), [&](int a, int b) {
-                auto& da = (*procData)[a];
-                auto& db = (*procData)[b];
+                auto& da = procData[a];
+                auto& db = procData[b];
                 double sa = da.cpuUsage + da.memoryUsage +
                             fabs(da.netSendSpeed) + fabs(da.netRecvSpeed);
                 double sb = db.cpuUsage + db.memoryUsage +
@@ -1521,7 +1567,7 @@ void UpdateProcessListView(MainWindowState* s, ProcessTabInfo& tab) {
     wchar_t buf[64];
     for (auto& group : groups) {
         for (int idx : group.indices) {
-            const auto& d = (*procData)[idx];
+            const auto& d = procData[idx];
             int lvIdx = ListView_GetItemCount(tab.hListView);
 
             LVITEMW item = {};
@@ -1645,6 +1691,7 @@ void ExportData(MainWindowState* s) {
     auto& cfg = ConfigManager::Instance().GetConfig();
 
     s->excelExporter.SetNetUnit(cfg.netUnit);
+    s->excelExporter.SetNetInterface(cfg.netInterface);
 
     auto systemData = s->dataBuffer.GetSystemDataCopy();
 
@@ -1663,7 +1710,7 @@ void ExportData(MainWindowState* s) {
     }
 
     if (s->excelExporter.Export(cfg.outputDir, s->monitorStartTime,
-                                systemData, processes, allProcessData, cfg.netUnit)) {
+                                systemData, processes, allProcessData, cfg.netUnit, cfg.netInterface)) {
         wchar_t msg[512];
         swprintf_s(msg, 512, L"数据已导出到 Excel 文件\r\n路径: %s", s->excelExporter.GetLastFilePath());
         MessageBoxW(s->hMainWnd, msg, L"成功", MB_OK | MB_ICONINFORMATION);

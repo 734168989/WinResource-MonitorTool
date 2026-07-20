@@ -284,15 +284,6 @@ std::vector<ProcessMonitorData> ProcessMonitor::Collect(double runSeconds, NetSp
     return results;
 }
 
-double ProcessMonitor::GetCollectElapsedSec(double runSeconds) {
-    double elapsed = 0.0;
-    if (m_lastCollectRunSeconds >= 0.0 && runSeconds > m_lastCollectRunSeconds) {
-        elapsed = runSeconds - m_lastCollectRunSeconds;
-    }
-    m_lastCollectRunSeconds = runSeconds;
-    return elapsed;
-}
-
 double ProcessMonitor::ConvertBytesToUnit(double bytesPerSec) const {
     if (wcscmp(m_netUnit, L"Kbps") == 0)
         return floor((bytesPerSec * 8.0 / 1000.0) * 100.0 + 0.5) / 100.0;

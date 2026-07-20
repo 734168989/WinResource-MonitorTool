@@ -48,5 +48,4 @@ private:
     LARGE_INTEGER m_qpcFrequency;
 
     double ConvertBytesToUnit(double bytesPerSec) const;
-    double GetCollectElapsedSec(double runSeconds);
 };

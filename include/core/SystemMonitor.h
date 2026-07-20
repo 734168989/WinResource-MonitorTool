@@ -34,6 +34,10 @@ public:
     // Initial call to establish baseline (call once before first Collect)
     void Initialize();
 
+    // Get the total (unfiltered) network speed — all interfaces combined.
+    double GetTotalNetSendSpeed() const { return m_totalNetSendSpeed; }
+    double GetTotalNetRecvSpeed() const { return m_totalNetRecvSpeed; }
+
 private:
     double GetCpuUsage();
     void GetMemoryInfo(double& totalGB, double& availGB, double& usedGB, double& usage);
@@ -50,6 +54,10 @@ private:
     ULONGLONG m_lastNetBytesSent;
     ULONGLONG m_lastNetBytesRecv;
     ULONGLONG m_lastNetTimestamp;
+    ULONGLONG m_lastTotalBytesSent;   // unfiltered baseline (all interfaces)
+    ULONGLONG m_lastTotalBytesRecv;
+    double m_totalNetSendSpeed;       // latest unfiltered speed
+    double m_totalNetRecvSpeed;
     LARGE_INTEGER m_qpcFrequency;
     bool m_netInitialized;
 

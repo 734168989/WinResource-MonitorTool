@@ -79,7 +79,8 @@ std::string HtmlChartExporter::BuildHtml(
     double startTimestamp,
     const std::vector<SystemMonitorData>& systemData,
     const std::vector<MonitorProcess>& processes,
-    const std::vector<std::vector<ProcessMonitorData>>& allProcessData)
+    const std::vector<std::vector<ProcessMonitorData>>& allProcessData,
+    const wchar_t* netInterface)
 {
     if (systemData.empty()) return "";
 
@@ -130,8 +131,16 @@ std::string HtmlChartExporter::BuildHtml(
     }
     {
         ChartData cdSend;
-        cdSend.title = L"系统网络发送";
-        cdSend.yLabel = L"发送 (Mbps)";
+        if (netInterface && wcscmp(netInterface, L"全部") != 0) {
+            wchar_t title[128];
+            swprintf_s(title, 128, L"系统网络发送 [%s]", netInterface);
+            cdSend.title = title;
+            swprintf_s(title, 128, L"发送 (Mbps) [%s]", netInterface);
+            cdSend.yLabel = title;
+        } else {
+            cdSend.title = L"系统网络发送";
+            cdSend.yLabel = L"发送 (Mbps)";
+        }
         cdSend.software = L"系统";
         cdSend.pid = L"";
         cdSend.metric = L"网络发送";
@@ -148,8 +157,16 @@ std::string HtmlChartExporter::BuildHtml(
     }
     {
         ChartData cdRecv;
-        cdRecv.title = L"系统网络接收";
-        cdRecv.yLabel = L"接收 (Mbps)";
+        if (netInterface && wcscmp(netInterface, L"全部") != 0) {
+            wchar_t title[128];
+            swprintf_s(title, 128, L"系统网络接收 [%s]", netInterface);
+            cdRecv.title = title;
+            swprintf_s(title, 128, L"接收 (Mbps) [%s]", netInterface);
+            cdRecv.yLabel = title;
+        } else {
+            cdRecv.title = L"系统网络接收";
+            cdRecv.yLabel = L"接收 (Mbps)";
+        }
         cdRecv.software = L"系统";
         cdRecv.pid = L"";
         cdRecv.metric = L"网络接收";
@@ -227,8 +244,16 @@ std::string HtmlChartExporter::BuildHtml(
             // Network Send
             {
                 ChartData cd;
-                cd.title = pidLabel + L" — 网络发送";
-                cd.yLabel = L"发送 (Mbps)";
+                if (netInterface && wcscmp(netInterface, L"全部") != 0) {
+                    wchar_t title[256];
+                    swprintf_s(title, 256, L"%s — 网络发送 [%s]", pidLabel.c_str(), netInterface);
+                    cd.title = title;
+                    swprintf_s(title, 256, L"发送 (Mbps) [%s]", netInterface);
+                    cd.yLabel = title;
+                } else {
+                    cd.title = pidLabel + L" — 网络发送";
+                    cd.yLabel = L"发送 (Mbps)";
+                }
                 cd.software = baseName;
                 cd.pid = std::to_wstring(pid);
                 cd.metric = L"网络发送";
@@ -246,8 +271,16 @@ std::string HtmlChartExporter::BuildHtml(
             // Network Receive
             {
                 ChartData cd;
-                cd.title = pidLabel + L" — 网络接收";
-                cd.yLabel = L"接收 (Mbps)";
+                if (netInterface && wcscmp(netInterface, L"全部") != 0) {
+                    wchar_t title[256];
+                    swprintf_s(title, 256, L"%s — 网络接收 [%s]", pidLabel.c_str(), netInterface);
+                    cd.title = title;
+                    swprintf_s(title, 256, L"接收 (Mbps) [%s]", netInterface);
+                    cd.yLabel = title;
+                } else {
+                    cd.title = pidLabel + L" — 网络接收";
+                    cd.yLabel = L"接收 (Mbps)";
+                }
                 cd.software = baseName;
                 cd.pid = std::to_wstring(pid);
                 cd.metric = L"网络接收";
@@ -848,9 +881,10 @@ std::wstring HtmlChartExporter::Export(
     const wchar_t* outputDir, double startTimestamp,
     const std::vector<SystemMonitorData>& systemData,
     const std::vector<MonitorProcess>& processes,
-    const std::vector<std::vector<ProcessMonitorData>>& allProcessData)
+    const std::vector<std::vector<ProcessMonitorData>>& allProcessData,
+    const wchar_t* netInterface)
 {
-    std::string html = BuildHtml(startTimestamp, systemData, processes, allProcessData);
+    std::string html = BuildHtml(startTimestamp, systemData, processes, allProcessData, netInterface);
     if (html.empty()) return L"";
 
     time_t startT = (time_t)startTimestamp;

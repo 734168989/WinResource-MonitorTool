@@ -456,6 +456,7 @@ static std::string BuildStylesXml() {
 }
 ExcelExporter::ExcelExporter() {
     wcscpy_s(m_netUnit, 16, L"Mbps");
+    wcscpy_s(m_netInterface, 256, L"全部");
     m_hFile = INVALID_HANDLE_VALUE;
     m_lastFilePath[0] = L'\0';
 }
@@ -464,6 +465,10 @@ ExcelExporter::~ExcelExporter() {}
 
 void ExcelExporter::SetNetUnit(const wchar_t* unit) {
     wcscpy_s(m_netUnit, 16, unit);
+}
+
+void ExcelExporter::SetNetInterface(const wchar_t* iface) {
+    wcscpy_s(m_netInterface, 256, iface);
 }
 
 // Remove .exe suffix and sanitize for Excel sheet name
@@ -490,7 +495,7 @@ bool ExcelExporter::Export(const wchar_t* outputDir, double startTimestamp,
                            const std::vector<SystemMonitorData>& systemData,
                            const std::vector<MonitorProcess>& processes,
                            const std::vector<std::vector<ProcessMonitorData>>& allProcessData,
-                           const wchar_t* netUnit)
+                           const wchar_t* netUnit, const wchar_t* netInterface)
 {
     // Build filename with timestamp
     time_t startT = (time_t)startTimestamp;
@@ -521,11 +526,18 @@ bool ExcelExporter::Export(const wchar_t* outputDir, double startTimestamp,
             L"时间戳", L"运行时间(秒)", L"CPU使用率(%)", L"内存总量(GB)",
             L"内存可用(GB)", L"内存使用(GB)", L"内存使用率(%)"
         };
-        wchar_t netHdr[64];
-        swprintf_s(netHdr, 64, L"网络发送(%s)", netUnit);
-        headers.push_back(netHdr);
-        swprintf_s(netHdr, 64, L"网络接收(%s)", netUnit);
-        headers.push_back(netHdr);
+        wchar_t netHdr[128];
+        if (wcscmp(netInterface, L"全部") == 0) {
+            swprintf_s(netHdr, 128, L"网络发送(%s)", netUnit);
+            headers.push_back(netHdr);
+            swprintf_s(netHdr, 128, L"网络接收(%s)", netUnit);
+            headers.push_back(netHdr);
+        } else {
+            swprintf_s(netHdr, 128, L"网络发送(%s)[%s]", netUnit, netInterface);
+            headers.push_back(netHdr);
+            swprintf_s(netHdr, 128, L"网络接收(%s)[%s]", netUnit, netInterface);
+            headers.push_back(netHdr);
+        }
         sheetHeaders.push_back(headers);
 
         std::vector<std::vector<std::wstring>> rows;
@@ -557,11 +569,18 @@ bool ExcelExporter::Export(const wchar_t* outputDir, double startTimestamp,
             L"时间戳", L"运行时间(秒)", L"进程ID", L"CPU使用率(%)",
             L"内存使用率(%)", L"内存使用(MB)"
         };
-        wchar_t netHdr[64];
-        swprintf_s(netHdr, 64, L"网络发送(%s)", netUnit);
-        headers.push_back(netHdr);
-        swprintf_s(netHdr, 64, L"网络接收(%s)", netUnit);
-        headers.push_back(netHdr);
+        wchar_t netHdr[128];
+        if (wcscmp(netInterface, L"全部") == 0) {
+            swprintf_s(netHdr, 128, L"网络发送(%s)", netUnit);
+            headers.push_back(netHdr);
+            swprintf_s(netHdr, 128, L"网络接收(%s)", netUnit);
+            headers.push_back(netHdr);
+        } else {
+            swprintf_s(netHdr, 128, L"网络发送(%s)[%s]", netUnit, netInterface);
+            headers.push_back(netHdr);
+            swprintf_s(netHdr, 128, L"网络接收(%s)[%s]", netUnit, netInterface);
+            headers.push_back(netHdr);
+        }
         sheetHeaders.push_back(headers);
 
         std::vector<std::vector<std::wstring>> rows;
@@ -694,7 +713,7 @@ static void BuildZipEntries(
     const std::vector<SystemMonitorData>& systemData,
     const std::vector<MonitorProcess>& processes,
     const std::vector<std::vector<ProcessMonitorData>>& allProcessData,
-    const wchar_t* netUnit)
+    const wchar_t* netUnit, const wchar_t* netInterface)
 {
     std::vector<std::wstring> sheetNames;
     std::vector<std::vector<std::wstring>> sheetHeaders;
@@ -707,11 +726,18 @@ static void BuildZipEntries(
             L"时间戳", L"运行时间(秒)", L"CPU使用率(%)", L"内存总量(GB)",
             L"内存可用(GB)", L"内存使用(GB)", L"内存使用率(%)"
         };
-        wchar_t netHdr[64];
-        swprintf_s(netHdr, 64, L"网络发送(%s)", netUnit);
-        headers.push_back(netHdr);
-        swprintf_s(netHdr, 64, L"网络接收(%s)", netUnit);
-        headers.push_back(netHdr);
+        wchar_t netHdr[128];
+        if (wcscmp(netInterface, L"全部") == 0) {
+            swprintf_s(netHdr, 128, L"网络发送(%s)", netUnit);
+            headers.push_back(netHdr);
+            swprintf_s(netHdr, 128, L"网络接收(%s)", netUnit);
+            headers.push_back(netHdr);
+        } else {
+            swprintf_s(netHdr, 128, L"网络发送(%s)[%s]", netUnit, netInterface);
+            headers.push_back(netHdr);
+            swprintf_s(netHdr, 128, L"网络接收(%s)[%s]", netUnit, netInterface);
+            headers.push_back(netHdr);
+        }
         sheetHeaders.push_back(headers);
 
         std::vector<std::vector<std::wstring>> rows;
@@ -756,11 +782,18 @@ static void BuildZipEntries(
             L"时间戳", L"运行时间(秒)", L"进程ID", L"CPU使用率(%)",
             L"内存使用率(%)", L"内存使用(MB)"
         };
-        wchar_t netHdr[64];
-        swprintf_s(netHdr, 64, L"网络发送(%s)", netUnit);
-        headers.push_back(netHdr);
-        swprintf_s(netHdr, 64, L"网络接收(%s)", netUnit);
-        headers.push_back(netHdr);
+        wchar_t netHdr[128];
+        if (wcscmp(netInterface, L"全部") == 0) {
+            swprintf_s(netHdr, 128, L"网络发送(%s)", netUnit);
+            headers.push_back(netHdr);
+            swprintf_s(netHdr, 128, L"网络接收(%s)", netUnit);
+            headers.push_back(netHdr);
+        } else {
+            swprintf_s(netHdr, 128, L"网络发送(%s)[%s]", netUnit, netInterface);
+            headers.push_back(netHdr);
+            swprintf_s(netHdr, 128, L"网络接收(%s)[%s]", netUnit, netInterface);
+            headers.push_back(netHdr);
+        }
         sheetHeaders.push_back(headers);
 
         std::vector<std::vector<std::wstring>> rows;
@@ -798,12 +831,12 @@ bool ExcelExporter::FlushExport(
     const std::vector<SystemMonitorData>& systemData,
     const std::vector<MonitorProcess>& processes,
     const std::vector<std::vector<ProcessMonitorData>>& allProcessData,
-    const wchar_t* netUnit)
+    const wchar_t* netUnit, const wchar_t* netInterface)
 {
     if (m_hFile == INVALID_HANDLE_VALUE) return false;
 
     std::vector<ZipEntry> zip;
-    BuildZipEntries(zip, systemData, processes, allProcessData, netUnit);
+    BuildZipEntries(zip, systemData, processes, allProcessData, netUnit, netInterface);
     return WriteZipToHandle(m_hFile, zip);
 }
 

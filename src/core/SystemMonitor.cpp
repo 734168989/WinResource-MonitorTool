@@ -13,6 +13,7 @@ SystemMonitor::SystemMonitor()
     : m_lastIdleTick(0), m_lastKernelTick(0), m_lastUserTick(0)
     , m_cpuInitialized(false)
     , m_lastNetBytesSent(0), m_lastNetBytesRecv(0), m_lastNetTimestamp(0)
+    , m_totalNetSendSpeed(0.0), m_totalNetRecvSpeed(0.0)
     , m_netInitialized(false)
 {
     wcscpy_s(m_netUnit, 16, L"Mbps");
@@ -75,9 +76,10 @@ std::vector<std::wstring> SystemMonitor::GetNetworkInterfaces() {
         ncpaNames.size());
     OutputDebugStringW(dbg);
 
-    // ======== Step 2: GetIfTable2 → Alias→{Index,Connected} ========
+    // ======== Step 2: GetIfTable2 → Alias→{Index,Connected} + Desc→{Index,Connected} ========
     struct IfInfo { NET_IFINDEX index; bool connected; };
-    std::unordered_map<std::wstring, IfInfo> ifMap;
+    std::unordered_map<std::wstring, IfInfo> ifMap;      // Alias → info
+    std::unordered_map<std::wstring, IfInfo> descMap;    // Description → info (fallback)
 
     PMIB_IF_TABLE2 pIfTable = nullptr;
     if (GetIfTable2(&pIfTable) == NO_ERROR) {
@@ -85,17 +87,28 @@ std::vector<std::wstring> SystemMonitor::GetNetworkInterfaces() {
             MIB_IF_ROW2& row = pIfTable->Table[i];
             if (row.Type == IF_TYPE_SOFTWARE_LOOPBACK) continue;
             if (!row.InterfaceAndOperStatusFlags.HardwareInterface) continue;
-            std::wstring key(row.Alias);
-            for (auto& c : key) c = towlower(c);
-            if (ifMap.find(key) == ifMap.end()) {
-                ifMap[key] = { row.InterfaceIndex,
-                    (row.OperStatus == IfOperStatusUp) };
+
+            IfInfo info = { row.InterfaceIndex,
+                (row.OperStatus == IfOperStatusUp) };
+
+            // Alias map
+            std::wstring aliasKey(row.Alias);
+            for (auto& c : aliasKey) c = towlower(c);
+            if (ifMap.find(aliasKey) == ifMap.end()) {
+                ifMap[aliasKey] = info;
+            }
+
+            // Description map (fallback — ncpa.cpl name often matches Description)
+            std::wstring descKey(row.Description);
+            for (auto& c : descKey) c = towlower(c);
+            if (descMap.find(descKey) == descMap.end()) {
+                descMap[descKey] = info;
             }
         }
         FreeMibTable(pIfTable);
     }
 
-    // ======== Step 3: 按名称交叉匹配 ========
+    // ======== Step 3: 按名称交叉匹配（Alias 优先，Description 回退）========
     for (const auto& name : ncpaNames) {
         std::wstring key(name);
         for (auto& c : key) c = towlower(c);
@@ -106,14 +119,26 @@ std::vector<std::wstring> SystemMonitor::GetNetworkInterfaces() {
             m_ifIndexToFriendly[it->second.index] = name;
             m_ifConnected[it->second.index] = it->second.connected;
             swprintf_s(dbg, 512,
-                L"[GetNetworkInterfaces] ADD: '%s' connected=%d\r\n",
+                L"[GetNetworkInterfaces] ADD (alias): '%s' connected=%d\r\n",
                 name.c_str(), it->second.connected);
             OutputDebugStringW(dbg);
         } else {
-            interfaces.push_back(name);
-            swprintf_s(dbg, 512,
-                L"[GetNetworkInterfaces] ADD (no hw): '%s'\r\n", name.c_str());
-            OutputDebugStringW(dbg);
+            // Fallback: try matching by Description
+            auto dit = descMap.find(key);
+            if (dit != descMap.end()) {
+                interfaces.push_back(name);
+                m_ifIndexToFriendly[dit->second.index] = name;
+                m_ifConnected[dit->second.index] = dit->second.connected;
+                swprintf_s(dbg, 512,
+                    L"[GetNetworkInterfaces] ADD (desc): '%s' connected=%d\r\n",
+                    name.c_str(), dit->second.connected);
+                OutputDebugStringW(dbg);
+            } else {
+                interfaces.push_back(name);
+                swprintf_s(dbg, 512,
+                    L"[GetNetworkInterfaces] ADD (no hw): '%s'\r\n", name.c_str());
+                OutputDebugStringW(dbg);
+            }
         }
     }
 
@@ -145,6 +170,7 @@ void SystemMonitor::Initialize() {
     if (GetIfTable2(&pIfTable) != NO_ERROR) return;
 
     ULONGLONG totalSent = 0, totalRecv = 0;
+    ULONGLONG allSent = 0, allRecv = 0;
     wchar_t dbg[512];
     swprintf_s(dbg, 512, L"[Initialize] selected='%s', map_size=%zu\r\n",
         m_netInterface, m_ifIndexToFriendly.size());
@@ -165,10 +191,15 @@ void SystemMonitor::Initialize() {
             totalSent += row.OutOctets;
             totalRecv += row.InOctets;
         }
+        // Always accumulate unfiltered total (all hardware interfaces)
+        allSent += row.OutOctets;
+        allRecv += row.InOctets;
     }
 
     m_lastNetBytesSent = totalSent;
     m_lastNetBytesRecv = totalRecv;
+    m_lastTotalBytesSent = allSent;
+    m_lastTotalBytesRecv = allRecv;
     QueryPerformanceCounter((LARGE_INTEGER*)&m_lastNetTimestamp);
     m_netInitialized = true;
     FreeMibTable(pIfTable);
@@ -249,11 +280,16 @@ void SystemMonitor::GetNetworkSpeed(double& sendSpeed, double& recvSpeed) {
     }
 
     ULONGLONG totalSent = 0, totalRecv = 0;
+    ULONGLONG allSent = 0, allRecv = 0;
     for (ULONG i = 0; i < pIfTable->NumEntries; i++) {
         MIB_IF_ROW2& row = pIfTable->Table[i];
         if (row.Type == IF_TYPE_SOFTWARE_LOOPBACK) continue;
         if (!row.InterfaceAndOperStatusFlags.HardwareInterface) continue;
         if (row.OperStatus != IfOperStatusUp) continue;
+
+        // Always accumulate unfiltered total
+        allSent += row.OutOctets;
+        allRecv += row.InOctets;
 
         auto it = m_ifIndexToFriendly.find(row.InterfaceIndex);
         if (it == m_ifIndexToFriendly.end()) continue;
@@ -292,6 +328,14 @@ void SystemMonitor::GetNetworkSpeed(double& sendSpeed, double& recvSpeed) {
 
     sendSpeed = ConvertToUnit((double)sentDiff / secondsElapsed);
     recvSpeed = ConvertToUnit((double)recvDiff / secondsElapsed);
+
+    // Calculate total (unfiltered) speed
+    ULONGLONG allSentDiff = (allSent >= m_lastTotalBytesSent) ? (allSent - m_lastTotalBytesSent) : 0;
+    ULONGLONG allRecvDiff = (allRecv >= m_lastTotalBytesRecv) ? (allRecv - m_lastTotalBytesRecv) : 0;
+    m_lastTotalBytesSent = allSent;
+    m_lastTotalBytesRecv = allRecv;
+    m_totalNetSendSpeed = ConvertToUnit((double)allSentDiff / secondsElapsed);
+    m_totalNetRecvSpeed = ConvertToUnit((double)allRecvDiff / secondsElapsed);
 }
 
 double SystemMonitor::ConvertToUnit(double bytesPerSec) {
@@ -310,4 +354,5 @@ void SystemMonitor::SetNetUnit(const wchar_t* unit) {
 
 void SystemMonitor::SetNetInterface(const wchar_t* iface) {
     wcscpy_s(m_netInterface, 256, iface);
+    GetNetworkInterfaces();
 }

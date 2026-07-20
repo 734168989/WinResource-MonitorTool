@@ -39,7 +39,7 @@ private:
     void QueryTcp(DWORD pid, ULONGLONG& sent, ULONGLONG& recv);
     void QueryUdp(DWORD pid, ULONGLONG& sent, ULONGLONG& recv);
 
-    bool m_running;
+    volatile bool m_running;
     std::map<ConnKey, ConnBaseline> m_connMap;
     CRITICAL_SECTION m_cs;
     int m_gcCounter;
